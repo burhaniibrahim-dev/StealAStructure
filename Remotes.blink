@@ -1,0 +1,4 @@
+-- these can be ignored if you are using the studio plugin
+-- Paths are relative to this file
+option ClientOutput = "src/ReplicatedStorage/Shared/Networker/Client.luau"
+option ServerOutput = "src/ServerScriptService/Networker/Server.luau"
