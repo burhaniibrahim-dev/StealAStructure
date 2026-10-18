@@ -161,9 +161,26 @@ local Queue: any = {
 
 local SerdesEvent = "?"
 local SerdesThread: thread?
+Queue.Reliable[0] = table.create(256)
+function SerdesFunctions.ReadEVENT_ClickEvent(): ({ Position: Vector3, Tag: string })
+	-- Read BLOCK: 14 bytes
+	local BLOCK_START = Read(14)
+	local Value = {} :: any
+	local X = buffer.readf32(RecieveBuffer, BLOCK_START + 0)
+	local Y = buffer.readf32(RecieveBuffer, BLOCK_START + 4)
+	local Z = buffer.readf32(RecieveBuffer, BLOCK_START + 8)
+	Value.Position = Vector3.new(X, Y, Z)
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 12)
+	Value.Tag = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	return Value
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
+	ClickEvent = {
+		On = NOOP
+	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
 end
@@ -226,6 +243,17 @@ Reliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instance
 		-- Read BLOCK: 1 bytes
 		local BLOCK_START = Read(1)
 		local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
+		if Index == 0 then
+			local Value: { Position: Vector3, Tag: string } = SerdesFunctions.ReadEVENT_ClickEvent()
+			if Events.Reliable[0] ~= nil then
+				task.spawn(Events.Reliable[0], Player, Value)
+			else
+				if #Queue.Reliable[0] > 256 then
+					warn("[Blink]: Event queue of \"ClickEvent\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[0], {Player, Value} :: {any})
+			end
+		end
 	end
 end)
 Unreliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instances: {Instance})
@@ -250,6 +278,20 @@ end)
 local Returns = table.freeze({
 	StepReplication = StepReplication,
 
+	ClickEvent = {
+		On = function(Listener: (Player: Player, Value: { Position: Vector3, Tag: string }) -> ()): () -> ()
+			Events.Reliable[0] = Listener
+			for Index, Arguments in Queue.Reliable[0] do
+				task.spawn(Listener, table.unpack(Arguments))
+			end
+			Queue.Reliable[0] = {}
+			return function (): ()
+				if Events.Reliable[0] == Listener then
+					Events.Reliable[0] = nil
+				end
+			end
+		end
+	},
 })
 type BLINK_EVENTS_SYMBOL = typeof(Returns)
 return Returns :: BLINK_EVENTS_SYMBOL

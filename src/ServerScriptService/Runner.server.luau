@@ -2,7 +2,8 @@
 
 local ServerScriptService = game:GetService("ServerScriptService")
 
--- Networker first so its remotes exist before clients wait on them
-local _Networker = require(ServerScriptService.Networker.Server)
+local ClientClickHandler = require(ServerScriptService.Features.ClientClickHandler)
+
+ClientClickHandler.Init()
 
 --============================================================================

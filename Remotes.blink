@@ -2,3 +2,14 @@
 -- Paths are relative to this file
 option ClientOutput = "src/ReplicatedStorage/Shared/Networker/Client.luau"
 option ServerOutput = "src/ServerScriptService/Networker/Server.luau"
+
+
+event ClickEvent {
+    from: Client,
+    type: Reliable, 
+    call: SingleAsync,
+    data: struct {
+        Position: vector,
+        Tag: string,
+    }
+}

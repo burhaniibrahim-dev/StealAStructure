@@ -160,9 +160,26 @@ local Queue: any = {
 
 local SerdesEvent = "?"
 local SerdesThread: thread?
+function SerdesFunctions.WriteEVENT_ClickEvent(Value: { Position: Vector3, Tag: string }): ()
+	-- Allocate BLOCK: 15 bytes
+	local BLOCK_START = Allocate(15)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 0)
+	local Vector = Value.Position
+	buffer.writef32(SendBuffer, BLOCK_START + 1, Vector.X)
+	buffer.writef32(SendBuffer, BLOCK_START + 5, Vector.Y)
+	buffer.writef32(SendBuffer, BLOCK_START + 9, Vector.Z)
+	local Length = #Value.Tag
+	buffer.writeu16(SendBuffer, BLOCK_START + 13, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.Tag, Length)
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
+	ClickEvent = {
+		Fire = NOOP
+	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
 end
@@ -229,6 +246,11 @@ end)
 local Returns = table.freeze({
 	StepReplication = StepReplication,
 
+	ClickEvent = {
+		Fire = function(Value: { Position: Vector3, Tag: string }): ()
+			SerdesFunctions.WriteEVENT_ClickEvent(Value)
+		end
+	},
 })
 type BLINK_EVENTS_SYMBOL = typeof(Returns)
 return Returns :: BLINK_EVENTS_SYMBOL
