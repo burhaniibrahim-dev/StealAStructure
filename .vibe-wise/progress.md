@@ -26,6 +26,11 @@
 - Introduced (AI explained): uncaught error in task.spawn loop kills thread permanently; pcall-per-player vs make-every-step-safe tradeoff.
 - Learner asked pcall vs task.spawn. AI explained: pcall = sync, catchable, yields still block; task.spawn = isolated thread, unobserved errors, overlapping ticks -> race/duplicate tracks. Expected states (no zone, missing priority) should be handled in logic, not error handling. Awaiting learner's choice.
 
+## Module lifecycle / threads
+- Needs reinforcement: ZoneSpawner returned task.spawn(Spawn) — ran at require time, returned one shared thread. AI explained modules run once and cache their return; return a function to start per-track threads.
+- AI flagged SpawnTrackRegistry bugs: key mismatch (player vs player.UserId) -> Create every tick; field Task vs Track; `task` param shadows global.
+- Awaiting: who starts/owns the spawn thread (ZoneService vs Create) and what args the spawn function needs.
+
 ## CollectionService
 - Learner implemented ZoneService (GetTagged("ZONE"), GUID-based zone Id attribute, 0.3s loop) + ZoneDetection stub.
 - Needs reinforcement: used CollectionService.TagAdded (fires with tag name string on first use) instead of GetInstanceAddedSignal; late-added zones get no Id. AI explained.

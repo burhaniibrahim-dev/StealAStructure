@@ -5,6 +5,7 @@ local HttpService = game:GetService("HttpService")
 
 local ZoneDetection = require(ServerScriptService.Features.Zones.ZoneDetection)
 local SpawnTrackRegistry = require(ServerScriptService.Features.Zones.SpawnTrackRegistry)
+local ZoneSpawner = require(ServerScriptService.Features.Zones.ZoneSpawner)
 
 local ZoneService = {}
 local ZONES = {}
@@ -23,15 +24,16 @@ local function CheckPlayers()
 
         if ZoneId then
             if TrackData then
-                if TrackData.Id ~= ZoneId then
-                    task.cancel(TrackData.Track)
-                else
-                    continue
+                if ZoneId ~= TrackData.Id or ZoneId == nil then
+                    SpawnTrackRegistry:Close(player)
+                elseif SpawnTrackRegistry:IsDead(player) then
+                    SpawnTrackRegistry:Restart(player)
                 end
+            else
+                SpawnTrackRegistry:Create(player, ZoneId, ZoneSpawner)
             end
-
-            SpawnTrackRegistry:Create(player)
         end
+
     end
 end
 
