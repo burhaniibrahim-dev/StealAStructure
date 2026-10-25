@@ -161,9 +161,92 @@ local Queue: any = {
 
 local SerdesEvent = "?"
 local SerdesThread: thread?
+export type ItemCounts = {[string]: number}
+function SerdesFunctions.WriteEVENT_InventorySnapshot(Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
+	-- Allocate BLOCK: 9 bytes
+	local BLOCK_START = Allocate(9)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 0)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.Revision)
+	buffer.writeu16(SendBuffer, BLOCK_START + 5, Value.MaxStack)
+	local Elements_1 = 0
+	for Key_1, Element_1 in Value.Counts do
+		Elements_1 += 1
+		local Length = #Key_1
+		local OFFSET_0 = Allocate(1)
+		buffer.writeu8(SendBuffer, OFFSET_0, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Key_1, Length)
+		local OFFSET_1 = Allocate(2)
+		buffer.writeu16(SendBuffer, OFFSET_1, Element_1)
+	end
+	buffer.writeu16(SendBuffer, BLOCK_START + 7, Elements_1)
+end
+
+function SerdesFunctions.WriteEVENT_InventoryChanged(Value: { Revision: number, ItemTypeId: string, Count: number }): ()
+	-- Allocate BLOCK: 8 bytes
+	local BLOCK_START = Allocate(8)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 1)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.Revision)
+	local Length = #Value.ItemTypeId
+	buffer.writeu8(SendBuffer, BLOCK_START + 5, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.ItemTypeId, Length)
+	buffer.writeu16(SendBuffer, BLOCK_START + 6, Value.Count)
+end
+
+function SerdesFunctions.WriteEVENT_PickupCollected(Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+	-- Allocate BLOCK: 20 bytes
+	local BLOCK_START = Allocate(20)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 2)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.PickupId)
+	local Length = #Value.ItemTypeId
+	buffer.writeu8(SendBuffer, BLOCK_START + 5, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.ItemTypeId, Length)
+	buffer.writeu16(SendBuffer, BLOCK_START + 6, Value.Amount)
+	local Vector = Value.Position
+	buffer.writef32(SendBuffer, BLOCK_START + 8, Vector.X)
+	buffer.writef32(SendBuffer, BLOCK_START + 12, Vector.Y)
+	buffer.writef32(SendBuffer, BLOCK_START + 16, Vector.Z)
+end
+
+function SerdesFunctions.WriteEVENT_InventoryFull(Value: { ItemTypeId: string }): ()
+	-- Allocate BLOCK: 2 bytes
+	local BLOCK_START = Allocate(2)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
+	local Length = #Value.ItemTypeId
+	buffer.writeu8(SendBuffer, BLOCK_START + 1, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.ItemTypeId, Length)
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
+	InventorySnapshot = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	InventoryChanged = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	PickupCollected = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	InventoryFull = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
 end
@@ -250,6 +333,190 @@ end)
 local Returns = table.freeze({
 	StepReplication = StepReplication,
 
+	InventorySnapshot = {
+		Fire = function(Player: Player, Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_InventorySnapshot(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventorySnapshot(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventorySnapshot(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventorySnapshot(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	InventoryChanged = {
+		Fire = function(Player: Player, Value: { Revision: number, ItemTypeId: string, Count: number }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_InventoryChanged(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { Revision: number, ItemTypeId: string, Count: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryChanged(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { Revision: number, ItemTypeId: string, Count: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryChanged(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { Revision: number, ItemTypeId: string, Count: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryChanged(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	PickupCollected = {
+		Fire = function(Player: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	InventoryFull = {
+		Fire = function(Player: Player, Value: { ItemTypeId: string }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_InventoryFull(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { ItemTypeId: string }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryFull(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { ItemTypeId: string }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryFull(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { ItemTypeId: string }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_InventoryFull(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
 })
 type BLINK_EVENTS_SYMBOL = typeof(Returns)
 return Returns :: BLINK_EVENTS_SYMBOL
