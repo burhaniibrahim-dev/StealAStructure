@@ -1,46 +1,37 @@
 # Project Map
 
 ## Purpose
-Roblox game. Current feature: detect which zone each player is in and spawn configured items in those zones as client-side models.
+Roblox winter-themed shared-map PvP simulator (StealAStructure). Players collect eggs from the floor and throw them at structures, targets, and traps. Implemented feature: item spawning + floor pickup (2026-10-24, direct implementation from learner's spec).
 
-## Requirements
-- Zones are box-shaped (square/rectangular) parts; zone size comes from the part.
-- Learner wants zone detection on the server (stated as "probably", not yet decided).
-- On an interval, the server tells clients what to spawn; item models are spawned client-side.
-- Which items spawn in which zone comes from config files.
-- Items are per-client: each player sees/owns their own spawned items.
-- Items are collectible; collected items go to the player's inventory (inventory system is later work) and can be thrown.
-- Chosen (learner): server decides spawn position + model name; remote payload = model name + Vector3; client clones model from ReplicatedStorage by name.
+## Requirements (from learner's spec)
+- Separate stack per egg type, max 100. Walk-over collection. Floor eggs expire after configurable lifetime.
+- Per-zone configurable distributions; never spawn on active traps; full inventory leaves pickup in place.
+- Tutorial gate for ordinary pickups; reserved tutorial pickups may have larger amounts.
+- Every inventory mutation needs an active loaded profile; client never chooses rarity/amount/position.
 
-## Components
-Verified existing:
-- Networking: Blink (generated) — schema `Remotes.blink`; outputs `src/ServerScriptService/Networker/Server.luau` and `src/ReplicatedStorage/Shared/Networker/Client.luau`. No events defined yet.
-- Client entry: `src/StarterPlayer/StarterPlayerScripts/Client.client.luau` (requires Networker client only).
-- Packages (Wally): Janitor, React, ReactRoblox, Promise.
-Chosen (confirmed, not implemented) — Item registry & pickup:
-- Server sends `{ id, name, position }` to the owning player only.
-- Client clones `name` from ReplicatedStorage and places it at `position`.
-- Server registry: `registry[player][id] = { name, position }`; IDs randomly generated.
-- Pickup: client sends `id` only; server checks id is in that player's registry and server-side HumanoidRootPart is within collection range of saved position; on success removes entry and grants item (inventory = later work).
-- PlayerRemoving clears that player's registry.
-- AI addition (approved): server collection range = client pickup range + buffer, both in config.
-- Unresolved: client-side removal timing (optimistic vs wait for server confirm).
-In progress (learner-written): `src/ServerScriptService/Features/Zones/ZoneService.luau` (tag collection, zone Ids, 0.3s CheckPlayers loop + track logic), `ZoneDetection.luau` (stub), `SpawnTrackRegistry` (required; not reviewed).
-Zone detection decided: ignore Y (zones are infinite vertical columns); priority attribute, ties disallowed.
-Not yet designed: zone/item config shape.
-Later work: inventory; speed/teleport anti-cheat (separate system).
+## Components (implemented)
+- Runner.server.luau — composition root; one Heartbeat drives zone poll (0.3s), spawner + ExpireDue, proximity sweep.
+- Services.luau — handles to live services for other features.
+- Configs/PickupConfig (server-only rules), Configs/ConfigValidator.
+- Features/Data: PlayerDataService (ProfileStore, fail closed), DataTemplate.
+- Features/Inventory/InventoryService — only balance owner; revisioned.
+- Features/Zones: ZoneService (stable ZoneId attribute, membership, population, anchors), ZoneDetection (pure geometry), ZoneSpawner (per-zone timers + budgets), SpawnTrackRegistry (personal tutorial sessions).
+- Features/Items: ItemRegistry (records + indexes), ItemService (lifecycle, atomic collect), PickupPlacement, ExclusionProviders (NoTrapsProvider placeholder), PickupAnalytics, RobloxPickupWorld (Roblox adapters).
+- Shared: Configs/Items/ItemDefinitions (presentation + MAX_STACK), Inventory/InventoryState (client revision guard).
+- Client: Client.client.luau, Controllers/PickupVisuals, UI/InventoryHud (React).
+- Blink events: InventorySnapshot, InventoryChanged, PickupCollected, InventoryFull (all server -> owning client, reliable).
+- Tests: tests/ (Lune, `lune run tests/run`).
 
 ## Main Flow
-Server: player position -> ? zone check -> which zone   [not yet designed]
-Server (interval, ?) --{id, name, position}--> owning Client   [payload chosen]
-Client: clone ReplicatedStorage model by name -> place at position   [chosen]
-Client --{id}--> Server: registry lookup + HRP distance check -> remove entry, grant item   [chosen]
+Server poll: root position -> ZoneDetection.Find -> membership/population
+ZoneSpawner (per zone, population-scaled) -> ItemService:TrySpawnOrdinary -> PickupPlacement -> ItemRegistry + server model in Workspace.Pickups
+Touch or sweep (server) -> ItemService:TryCollect -> InventoryService:TryAdd -> Blink to owner
 
 ## Data and Trust Boundaries
-Unknown. Open question: what the server sends vs. what the client decides.
+Server owns inventory, pickup eligibility, spawn outcomes, timing. Client only renders (bob/spin, effects, HUD, hides others' reserved pickups). Clients send nothing for pickups.
 
 ## Build and Deployment
-Rojo project: `default.project.json`. Toolchain: `rokit.toml`, `wally.toml`, selene, stylua.
+Rojo `default.project.json` (ServerPackages mapped under ServerScriptService). Toolchain `rokit.toml`; stylua/selene pinned but not trusted/installed locally as of 2026-10-24.
 
-## Unknowns
-- Zone check method, interval, payload shape, where configs live, how spawned items are collected/validated.
+## Unknowns / integration dependencies
+- Trap system (replace NoTrapsProvider), tutorial feature (calls ItemService tutorial API), throwing (InventoryService:TryConsume), movement validation, platform analytics sink.

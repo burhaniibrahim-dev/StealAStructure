@@ -2,3 +2,56 @@
 -- Paths are relative to this file
 option ClientOutput = "src/ReplicatedStorage/Shared/Networker/Client.luau"
 option ServerOutput = "src/ServerScriptService/Networker/Server.luau"
+
+-- Inventory ---------------------------------------------------------------
+-- Inventory messages only ever go to the owning player.
+-- Revision increases on every mutation; clients drop anything older than what they hold.
+
+map ItemCounts = {[string(1..32)]: u16}
+
+event InventorySnapshot {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		Revision: u32,
+		MaxStack: u16,
+		Counts: ItemCounts,
+	},
+}
+
+event InventoryChanged {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		Revision: u32,
+		ItemTypeId: string(1..32),
+		Count: u16,
+	},
+}
+
+-- Pickups -----------------------------------------------------------------
+-- Pickup models replicate through Workspace; these are outcome notifications only.
+
+event PickupCollected {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		PickupId: u32,
+		ItemTypeId: string(1..32),
+		Amount: u16,
+		Position: vector,
+	},
+}
+
+-- Rate-limited on the server per player per egg type
+event InventoryFull {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		ItemTypeId: string(1..32),
+	},
+}

@@ -160,9 +160,88 @@ local Queue: any = {
 
 local SerdesEvent = "?"
 local SerdesThread: thread?
+Queue.Reliable[0] = table.create(256)
+Queue.Reliable[1] = table.create(256)
+Queue.Reliable[2] = table.create(256)
+Queue.Reliable[3] = table.create(256)
+export type ItemCounts = {[string]: number}
+function SerdesFunctions.ReadEVENT_InventorySnapshot(): ({ Revision: number, MaxStack: number, Counts: {[string]: number} })
+	-- Read BLOCK: 8 bytes
+	local BLOCK_START = Read(8)
+	local Value = {} :: any
+	Value.Revision = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	Value.MaxStack = buffer.readu16(RecieveBuffer, BLOCK_START + 4)
+	Value.Counts = {}
+	local Elements_1 = buffer.readu16(RecieveBuffer, BLOCK_START + 6)
+	for _ = 1, Elements_1 do
+		local OFFSET_0 = Read(1)
+		local Length = buffer.readu8(RecieveBuffer, OFFSET_0)
+		local Key_1 = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		if #Key_1 < 1 then error(`Expected length of "Key_1" to be larger than or equal to 1, got {#Key_1} instead.`) end
+		if #Key_1 > 32 then error(`Expected length of "Key_1" to be smaller than or equal to  32, got {#Key_1} instead.`) end
+		local OFFSET_1 = Read(2)
+		local Element_1 = buffer.readu16(RecieveBuffer, OFFSET_1)
+		Value.Counts[Key_1] = Element_1
+	end
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_InventoryChanged(): ({ Revision: number, ItemTypeId: string, Count: number })
+	-- Read BLOCK: 7 bytes
+	local BLOCK_START = Read(7)
+	local Value = {} :: any
+	Value.Revision = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	local Length = buffer.readu8(RecieveBuffer, BLOCK_START + 4)
+	Value.ItemTypeId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	if #Value.ItemTypeId < 1 then error(`Expected length of "Value.ItemTypeId" to be larger than or equal to 1, got {#Value.ItemTypeId} instead.`) end
+	if #Value.ItemTypeId > 32 then error(`Expected length of "Value.ItemTypeId" to be smaller than or equal to  32, got {#Value.ItemTypeId} instead.`) end
+	Value.Count = buffer.readu16(RecieveBuffer, BLOCK_START + 5)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_PickupCollected(): ({ PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 })
+	-- Read BLOCK: 19 bytes
+	local BLOCK_START = Read(19)
+	local Value = {} :: any
+	Value.PickupId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	local Length = buffer.readu8(RecieveBuffer, BLOCK_START + 4)
+	Value.ItemTypeId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	if #Value.ItemTypeId < 1 then error(`Expected length of "Value.ItemTypeId" to be larger than or equal to 1, got {#Value.ItemTypeId} instead.`) end
+	if #Value.ItemTypeId > 32 then error(`Expected length of "Value.ItemTypeId" to be smaller than or equal to  32, got {#Value.ItemTypeId} instead.`) end
+	Value.Amount = buffer.readu16(RecieveBuffer, BLOCK_START + 5)
+	local X = buffer.readf32(RecieveBuffer, BLOCK_START + 7)
+	local Y = buffer.readf32(RecieveBuffer, BLOCK_START + 11)
+	local Z = buffer.readf32(RecieveBuffer, BLOCK_START + 15)
+	Value.Position = Vector3.new(X, Y, Z)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_InventoryFull(): ({ ItemTypeId: string })
+	-- Read BLOCK: 1 bytes
+	local BLOCK_START = Read(1)
+	local Value = {} :: any
+	local Length = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
+	Value.ItemTypeId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	if #Value.ItemTypeId < 1 then error(`Expected length of "Value.ItemTypeId" to be larger than or equal to 1, got {#Value.ItemTypeId} instead.`) end
+	if #Value.ItemTypeId > 32 then error(`Expected length of "Value.ItemTypeId" to be smaller than or equal to  32, got {#Value.ItemTypeId} instead.`) end
+	return Value
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
+	InventorySnapshot = {
+		On = NOOP
+	},
+	InventoryChanged = {
+		On = NOOP
+	},
+	PickupCollected = {
+		On = NOOP
+	},
+	InventoryFull = {
+		On = NOOP
+	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
 end
@@ -205,6 +284,51 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 		-- Read BLOCK: 1 bytes
 		local BLOCK_START = Read(1)
 		local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
+		if Index == 0 then
+			local Value: { Revision: number, MaxStack: number, Counts: {[string]: number} } = SerdesFunctions.ReadEVENT_InventorySnapshot()
+			if Events.Reliable[0] ~= nil then
+				SerdesEvent = "InventorySnapshot"
+				Events.Reliable[0](Value)
+			else
+				if #Queue.Reliable[0] > 256 then
+					warn("[Blink]: Event queue of \"InventorySnapshot\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[0], {Value} :: {any})
+			end
+		elseif Index == 1 then
+			local Value: { Revision: number, ItemTypeId: string, Count: number } = SerdesFunctions.ReadEVENT_InventoryChanged()
+			if Events.Reliable[1] ~= nil then
+				SerdesEvent = "InventoryChanged"
+				Events.Reliable[1](Value)
+			else
+				if #Queue.Reliable[1] > 256 then
+					warn("[Blink]: Event queue of \"InventoryChanged\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[1], {Value} :: {any})
+			end
+		elseif Index == 2 then
+			local Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 } = SerdesFunctions.ReadEVENT_PickupCollected()
+			if Events.Reliable[2] ~= nil then
+				SerdesEvent = "PickupCollected"
+				Events.Reliable[2](Value)
+			else
+				if #Queue.Reliable[2] > 256 then
+					warn("[Blink]: Event queue of \"PickupCollected\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[2], {Value} :: {any})
+			end
+		elseif Index == 3 then
+			local Value: { ItemTypeId: string } = SerdesFunctions.ReadEVENT_InventoryFull()
+			if Events.Reliable[3] ~= nil then
+				SerdesEvent = "InventoryFull"
+				Events.Reliable[3](Value)
+			else
+				if #Queue.Reliable[3] > 256 then
+					warn("[Blink]: Event queue of \"InventoryFull\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[3], {Value} :: {any})
+			end
+		end
 	end
 end)
 Unreliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
@@ -229,6 +353,62 @@ end)
 local Returns = table.freeze({
 	StepReplication = StepReplication,
 
+	InventorySnapshot = {
+		On = function(Listener: (Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }) -> ()): () -> ()
+			Events.Reliable[0] = Listener
+			for Index, Arguments in Queue.Reliable[0] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[0] = {}
+			return function (): ()
+				if Events.Reliable[0] == Listener then
+					Events.Reliable[0] = nil
+				end
+			end
+		end
+	},
+	InventoryChanged = {
+		On = function(Listener: (Value: { Revision: number, ItemTypeId: string, Count: number }) -> ()): () -> ()
+			Events.Reliable[1] = Listener
+			for Index, Arguments in Queue.Reliable[1] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[1] = {}
+			return function (): ()
+				if Events.Reliable[1] == Listener then
+					Events.Reliable[1] = nil
+				end
+			end
+		end
+	},
+	PickupCollected = {
+		On = function(Listener: (Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }) -> ()): () -> ()
+			Events.Reliable[2] = Listener
+			for Index, Arguments in Queue.Reliable[2] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[2] = {}
+			return function (): ()
+				if Events.Reliable[2] == Listener then
+					Events.Reliable[2] = nil
+				end
+			end
+		end
+	},
+	InventoryFull = {
+		On = function(Listener: (Value: { ItemTypeId: string }) -> ()): () -> ()
+			Events.Reliable[3] = Listener
+			for Index, Arguments in Queue.Reliable[3] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[3] = {}
+			return function (): ()
+				if Events.Reliable[3] == Listener then
+					Events.Reliable[3] = nil
+				end
+			end
+		end
+	},
 })
 type BLINK_EVENTS_SYMBOL = typeof(Returns)
 return Returns :: BLINK_EVENTS_SYMBOL

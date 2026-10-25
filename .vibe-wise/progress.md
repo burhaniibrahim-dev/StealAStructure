@@ -36,9 +36,14 @@
 - Needs reinforcement: used CollectionService.TagAdded (fires with tag name string on first use) instead of GetInstanceAddedSignal; late-added zones get no Id. AI explained.
 - Unknown "RigEdit" parent appearing in tagged set — AI suggested GetFullName diagnosis; likely a plugin (unverified); suggested unique tag / filtering (learner's choice).
 
-## Pending decision
+## Direct implementation (2026-10-24)
+Learner supplied a complete written spec for item spawning + floor pickup and explicitly asked for direct, working implementation (not a plan). Treated as an explicit direct-implementation request; learning loop bypassed for this feature only. Learning mode remains active.
+The spec superseded several earlier learner choices: pickups are shared server-owned models (not per-client), ordinary spawning is per zone with population budgets (not one track per player), SpawnTrackRegistry kept only for personal tutorial sessions, client never sends pickup ids (touch/sweep on server). Learner-authored decisions kept: Priority attribute (highest wins, ties are errors), CollectionService tags, object-space checks, Block + Cylinder zones, ignore Y by default (now explicit "Column" mode; "Volume" optional).
+Not demonstrated by learner: the implemented design's internals. Good candidates for a later System check: atomic collection without yields, generation-checked expiry, revisioned inventory updates.
+
+## Pending decision (superseded 2026-10-24 by the direct implementation above)
 Decision: Zone detection + spawn loop.
-Stage: awaiting reasoning (Build checkpoint, follow-up).
+Stage: superseded; kept for history.
 Learner proposed: zones = tagged parts (CollectionService) with Priority attribute (0 lowest, highest wins); poll every ~0.2s using CFrame object-space check; while player is in a zone, roll random spawn timer from config; no spawning outside zones; item cap from a separate config; zone config holds loot table (AI reading of "loop table" — unconfirmed) + spawn times; loot tables differ per zone.
 Resolved by learner: equal priority never allowed; loot tables are weighted; cap is per zone; zone shapes = Block + Cylinder; sampling ignores Y.
 Also resolved: area formula dropped (learner concluded only extents needed); Y = item height + 3 or per-item config offset (baseline unclear); single interval loop over players; zone manager returns one zone or nil per player.

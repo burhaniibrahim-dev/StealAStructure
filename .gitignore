@@ -9,3 +9,4 @@ sourcemap.json
 
 # Wally packages (reinstall with `wally install`)
 /Packages
+/ServerPackages
