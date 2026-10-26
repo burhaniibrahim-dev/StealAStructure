@@ -253,11 +253,11 @@ local ZoneDetection = require("../src/ServerScriptService/Features/Zones/ZoneDet
 local ZoneService = require("../src/ServerScriptService/Features/Zones/ZoneService")
 local ZoneSpawner = require("../src/ServerScriptService/Features/Zones/ZoneSpawner")
 local SpawnTrackRegistry = require("../src/ServerScriptService/Features/Zones/SpawnTrackRegistry")
-local ItemRegistry = require("../src/ServerScriptService/Features/Items/ItemRegistry")
-local ItemService = require("../src/ServerScriptService/Features/Items/ItemService")
-local PickupPlacement = require("../src/ServerScriptService/Features/Items/PickupPlacement")
-local PickupAnalytics = require("../src/ServerScriptService/Features/Items/PickupAnalytics")
-local ExclusionProviders = require("../src/ServerScriptService/Features/Items/ExclusionProviders")
+local EggRegistry = require("../src/ServerScriptService/Features/Items/Eggs/EggRegistry")
+local EggService = require("../src/ServerScriptService/Features/Items/Eggs/EggService")
+local PickupPlacement = require("../src/ServerScriptService/Features/Items/Eggs/PickupPlacement")
+local PickupAnalytics = require("../src/ServerScriptService/Features/Items/Eggs/PickupAnalytics")
+local ExclusionProviders = require("../src/ServerScriptService/Features/Items/Eggs/ExclusionProviders")
 local InventoryService = require("../src/ServerScriptService/Features/Inventory/InventoryService")
 
 TestKit.Signal = Signal
@@ -265,8 +265,10 @@ TestKit.ZoneDetection = ZoneDetection
 TestKit.ZoneService = ZoneService
 TestKit.ZoneSpawner = ZoneSpawner
 TestKit.SpawnTrackRegistry = SpawnTrackRegistry
-TestKit.ItemRegistry = ItemRegistry
-TestKit.ItemService = ItemService
+TestKit.EggRegistry = EggRegistry
+TestKit.EggService = EggService
+-- Deferred for MVP: not part of System(). Only the direct analytics-module tests construct it
+TestKit.PickupAnalytics = PickupAnalytics
 TestKit.ExclusionProviders = ExclusionProviders
 TestKit.InventoryService = InventoryService
 
@@ -371,14 +373,13 @@ function TestKit.System(options)
 		canAccess = options.canAccess,
 		warn = warnSink,
 	})
-	sys.registry = ItemRegistry.new()
+	sys.eggRegistry = EggRegistry.new()
 	sys.inventory = InventoryService.new({ data = sys.data, itemDefinitions = sys.itemDefinitions, Signal = Signal })
-	sys.analytics = PickupAnalytics.new({ data = sys.data, Signal = Signal })
 	sys.placement = PickupPlacement.new({
 		config = sys.config.Placement,
 		detection = ZoneDetection,
 		world = sys.world,
-		registry = sys.registry,
+		registry = sys.eggRegistry,
 		getAnchors = function(zoneId)
 			return sys.zones:GetAnchors(zoneId)
 		end,
@@ -397,16 +398,15 @@ function TestKit.System(options)
 		end,
 		warn = warnSink,
 	})
-	sys.items = ItemService.new({
+	sys.eggs = EggService.new({
 		config = sys.config,
 		itemDefinitions = sys.itemDefinitions,
-		registry = sys.registry,
+		registry = sys.eggRegistry,
 		placement = sys.placement,
 		detection = ZoneDetection,
 		zones = sys.zones,
 		inventory = sys.inventory,
 		data = sys.data,
-		analytics = sys.analytics,
 		tracks = sys.tracks,
 		models = sys.models,
 		scheduler = sys.time.scheduler,
@@ -423,12 +423,12 @@ function TestKit.System(options)
 	sys.spawner = ZoneSpawner.new({
 		config = sys.config,
 		zones = sys.zones,
-		items = sys.items,
-		registry = sys.registry,
+		eggs = sys.eggs,
+		eggRegistry = sys.eggRegistry,
 		rng = sys.rng,
 	})
 	sys.zones.ZoneRemoved:Connect(function(zoneId)
-		sys.items:RemoveZonePickups(zoneId)
+		sys.eggs:RemoveZonePickups(zoneId)
 		sys.spawner:RemoveZone(zoneId)
 	end)
 
@@ -444,7 +444,7 @@ function TestKit.System(options)
 	end
 	function sys.removePlayer(player)
 		player.Present = false
-		sys.items:OnPlayerRemoving(player)
+		sys.eggs:OnPlayerRemoving(player)
 		sys.zones:RemovePlayer(player)
 		sys.data:Unload(player)
 	end
@@ -462,7 +462,7 @@ function TestKit.System(options)
 		local size = zone.Size
 		local center = zone.CFrame.Position
 		sys.rng:Push((x - center.X) / size.X + 0.5, (z - center.Z) / size.Z + 0.5)
-		return sys.items:TrySpawnOrdinary(zoneId, itemTypeId or "SnowEgg", amount or 1, 1000)
+		return sys.eggs:TrySpawnOrdinary(zoneId, itemTypeId or "SnowEgg", amount or 1, 1000)
 	end
 	function sys.setCount(player, itemTypeId, count)
 		sys.data:GetData(player).Inventory[itemTypeId] = count

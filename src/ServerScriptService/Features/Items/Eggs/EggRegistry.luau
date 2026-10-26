@@ -6,19 +6,19 @@
 --   PickupId, ItemTypeId, Amount, ZoneId?, Position, CreatedAt, ExpiresAt, ReservedUserId?,
 --   State ("Available" | "Reserved" | "Collected" | "Despawned"),
 --   Generation (bumped on every state change; delayed callbacks compare it before acting),
---   Model / Cleanup (owned by ItemService's model factory), ExpiryHandle
+--   Model / Cleanup (owned by EggService's model factory), ExpiryHandle
 
-local ItemRegistry = {}
-ItemRegistry.__index = ItemRegistry
+local EggRegistry = {}
+EggRegistry.__index = EggRegistry
 
-ItemRegistry.State = {
+EggRegistry.State = {
 	Available = "Available",
 	Reserved = "Reserved",
 	Collected = "Collected",
 	Despawned = "Despawned",
 }
 
-function ItemRegistry.new()
+function EggRegistry.new()
 	return setmetatable({
 		_nextId = 0,
 		_byId = {},
@@ -28,7 +28,7 @@ function ItemRegistry.new()
 		_reservedCounts = {}, -- [UserId] = count
 		_ordinaryCount = 0,
 		_count = 0,
-	}, ItemRegistry)
+	}, EggRegistry)
 end
 
 local function addTo(index, key, record)
@@ -55,7 +55,7 @@ local function adjust(counts, key, delta)
 	counts[key] = if value > 0 then value else nil
 end
 
-function ItemRegistry:Create(fields)
+function EggRegistry:Create(fields)
 	self._nextId += 1
 	local record = {
 		PickupId = self._nextId,
@@ -66,7 +66,7 @@ function ItemRegistry:Create(fields)
 		CreatedAt = fields.CreatedAt,
 		ExpiresAt = fields.ExpiresAt,
 		ReservedUserId = fields.ReservedUserId,
-		State = if fields.ReservedUserId then ItemRegistry.State.Reserved else ItemRegistry.State.Available,
+		State = if fields.ReservedUserId then EggRegistry.State.Reserved else EggRegistry.State.Available,
 		Generation = 1,
 		Model = nil,
 		Cleanup = nil,
@@ -90,23 +90,23 @@ function ItemRegistry:Create(fields)
 	return record
 end
 
-function ItemRegistry:Get(pickupId)
+function EggRegistry:Get(pickupId)
 	return self._byId[pickupId]
 end
 
-function ItemRegistry.IsCollectible(record)
-	return record.State == ItemRegistry.State.Available or record.State == ItemRegistry.State.Reserved
+function EggRegistry.IsCollectible(record)
+	return record.State == EggRegistry.State.Available or record.State == EggRegistry.State.Reserved
 end
 
 -- Moves a live record to a terminal state and drops it from every index. Returns nil if already gone,
 -- which is what makes collection, expiry, and removal mutually exclusive
-function ItemRegistry:Finish(pickupId, finalState)
+function EggRegistry:Finish(pickupId, finalState)
 	local record = self._byId[pickupId]
 	if not record then
 		return nil
 	end
 	assert(
-		finalState == ItemRegistry.State.Collected or finalState == ItemRegistry.State.Despawned,
+		finalState == EggRegistry.State.Collected or finalState == EggRegistry.State.Despawned,
 		"Finish needs a terminal state"
 	)
 
@@ -130,19 +130,19 @@ function ItemRegistry:Finish(pickupId, finalState)
 end
 
 -- Ordinary pickups in a zone (the zone budget)
-function ItemRegistry:CountZone(zoneId)
+function EggRegistry:CountZone(zoneId)
 	return self._ordinaryByZone[zoneId] or 0
 end
 
-function ItemRegistry:CountOrdinary()
+function EggRegistry:CountOrdinary()
 	return self._ordinaryCount
 end
 
-function ItemRegistry:CountReserved(userId)
+function EggRegistry:CountReserved(userId)
 	return self._reservedCounts[userId] or 0
 end
 
-function ItemRegistry:Count()
+function EggRegistry:Count()
 	return self._count
 end
 
@@ -155,21 +155,21 @@ local function toList(bucket)
 end
 
 -- The list functions return copies, safe to iterate while finishing records
-function ItemRegistry:GetInZone(zoneId)
+function EggRegistry:GetInZone(zoneId)
 	return toList(self._byZone[zoneId])
 end
 
-function ItemRegistry:GetReservedFor(userId)
+function EggRegistry:GetReservedFor(userId)
 	return toList(self._byReserved[userId])
 end
 
-function ItemRegistry:GetAll()
+function EggRegistry:GetAll()
 	return toList(self._byId)
 end
 
 -- Read-only iteration over every live record without copying. Do not finish records inside the loop
-function ItemRegistry:Iterate()
+function EggRegistry:Iterate()
 	return pairs(self._byId)
 end
 
-return ItemRegistry
+return EggRegistry

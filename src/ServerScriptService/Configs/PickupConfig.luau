@@ -29,7 +29,7 @@ return {
 		PopulationCap = 8, -- players beyond this add no rate or budget
 	},
 
-	-- Placement (ItemService / PickupPlacement) ----------------------------
+	-- Placement (EggService / PickupPlacement) -----------------------------
 	Placement = {
 		MaxAttempts = 8, -- candidates per scheduled spawn; then skip until the next opportunity
 		RaycastHeight = 40, -- ray starts this far above the zone top

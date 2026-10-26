@@ -1,6 +1,6 @@
 -- Responsibility: Owns registered spawn zones, authored spawn anchors, and which zone each player is in.
 -- Zones are BaseParts tagged "SpawnZone" with an authored, stable "ZoneId" string attribute.
--- Polling reads positions without yielding. Spawn timing lives in ZoneSpawner; pickups live in ItemService.
+-- Polling reads positions without yielding. Spawn timing lives in ZoneSpawner; egg pickups live in EggService.
 --
 -- Zone part attributes:
 --   ZoneId       (string, required, 1..32 chars, unique) - stable key into PickupConfig.Zones
@@ -37,10 +37,12 @@ end
 --   getRootPosition: (Player) -> Vector3?   must not yield; nil means no living character
 --   canAccess: ((Player, ZoneId) -> boolean)?   future gate (e.g. rebirth-locked zones); default allows
 --   warn: ((string) -> ())?
+
 function ZoneService.new(deps)
 	return setmetatable({
 		_deps = deps,
 		_warn = deps.warn or warn,
+		
 		_zonesById = {},
 		_zoneByPart = {},
 		_zoneList = {},

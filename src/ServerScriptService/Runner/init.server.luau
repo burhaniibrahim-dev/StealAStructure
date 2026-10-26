@@ -1,5 +1,6 @@
--- Responsibility: The only server Script. Validates config, builds every server feature in a fixed order,
--- wires them together, and drives the shared ticks. Features stay free of each other's internals.
+-- Responsibility: The only server Script. Validates config, initializes every server system in a fixed order,
+-- creates the shared instances they use, wires them together, and drives the shared ticks.
+-- Construction details live in the child setup modules: Runner.Data, Runner.Zones, Runner.Eggs.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -11,30 +12,21 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Networker = require(ServerScriptService.Networker.Server)
 local _Features = ServerScriptService.Features
 
-local ProfileStore = require(ServerScriptService.ServerPackages.ProfileStore)
 local ItemDefinitions = require(ReplicatedStorage.Shared.Configs.Items.ItemDefinitions)
 local ConfigValidator = require(ServerScriptService.Configs.ConfigValidator)
 local PickupConfig = require(ServerScriptService.Configs.PickupConfig)
 local Services = require(ServerScriptService.Services)
 local Signal = require(ServerScriptService.Util.Signal)
 
-local DataTemplate = require(_Features.Data.DataTemplate)
-local PlayerDataService = require(_Features.Data.PlayerDataService)
+local EggRegistry = require(_Features.Items.Eggs.EggRegistry)
 local InventoryService = require(_Features.Inventory.InventoryService)
-local ExclusionProviders = require(_Features.Items.ExclusionProviders)
-local ItemRegistry = require(_Features.Items.ItemRegistry)
-local ItemService = require(_Features.Items.ItemService)
-local PickupAnalytics = require(_Features.Items.PickupAnalytics)
-local PickupPlacement = require(_Features.Items.PickupPlacement)
-local RobloxPickupWorld = require(_Features.Items.RobloxPickupWorld)
-local SpawnTrackRegistry = require(_Features.Zones.SpawnTrackRegistry)
-local ZoneDetection = require(_Features.Zones.ZoneDetection)
 local ZoneService = require(_Features.Zones.ZoneService)
-local ZoneSpawner = require(_Features.Zones.ZoneSpawner)
 
-local PROFILE_STORE_NAME = "PlayerData_v1"
+local Data = require(script.Data)
+local Eggs = require(script.Eggs)
+local Zones = require(script.Zones)
+
 local ZONE_POLL_INTERVAL = 0.3
-local EXCLUSION_TAG = "PickupExclusion"
 
 --============================================================================
 -- Config
@@ -42,38 +34,15 @@ local EXCLUSION_TAG = "PickupExclusion"
 ConfigValidator.assert(PickupConfig, ItemDefinitions)
 
 --============================================================================
--- Player data
+-- Shared instances. Each is created once here and handed to every system that uses it
 
-local profileStore = ProfileStore.New(PROFILE_STORE_NAME, DataTemplate(PickupConfig))
-
-local playerData = PlayerDataService.new({
-	Signal = Signal,
-	isPresent = RobloxPickupWorld.isPlayerPresent,
-	kick = function(player, message)
-		player:Kick(message)
-	end,
-	startSession = function(player)
-		local profile = profileStore:StartSessionAsync(`Player_{player.UserId}`, {
-			Cancel = function()
-				return player.Parent ~= Players
-			end,
-		})
-		if profile then
-			profile:AddUserId(player.UserId)
-			profile:Reconcile()
-		end
-		return profile
-	end,
-})
-
-local inventory = InventoryService.new({
-	data = playerData,
-	itemDefinitions = ItemDefinitions,
-	Signal = Signal,
-})
+local eggRegistry = EggRegistry.new() -- egg management and zone spawning must count the same pickups
+local rng = Random.new()
 
 --============================================================================
--- Zones
+-- Player data
+
+local playerData = Data.Init({ config = PickupConfig })
 
 -- Only players with an active profile count toward zone population (and therefore supply)
 local function getActivePlayers()
@@ -86,99 +55,58 @@ local function getActivePlayers()
 	return active
 end
 
-local zones = ZoneService.new({
+--============================================================================
+-- Inventory
+
+local inventory = InventoryService.new({
+	data = playerData,
+	itemDefinitions = ItemDefinitions,
 	Signal = Signal,
-	Detection = ZoneDetection,
-	getPlayers = getActivePlayers,
-	getRootPosition = RobloxPickupWorld.getRootPosition,
 })
 
 --============================================================================
--- Pickups
+-- Zones (stage 1: the zone service, needed by eggs)
 
-local pickupFolder = Instance.new("Folder")
-pickupFolder.Name = "Pickups"
-pickupFolder.Parent = workspace
+local zones = Zones.Init({ getActivePlayers = getActivePlayers })
 
-local traps = ExclusionProviders.NoTrapsProvider()
-if traps.IsPlaceholder then
-	warn("[Pickups] Trap exclusion uses NoTrapsProvider: no trap system exists yet, so trap avoidance is inactive.")
-end
+--============================================================================
+-- Eggs
 
-local registry = ItemRegistry.new()
-local rng = Random.new()
-
-local placement = PickupPlacement.new({
-	config = PickupConfig.Placement,
-	detection = ZoneDetection,
-	registry = registry,
-	world = RobloxPickupWorld.newWorld({
-		workspace = workspace,
-		pickupFolder = pickupFolder,
-		zoneTag = ZoneService.ZONE_TAG,
-	}),
-	getAnchors = function(zoneId)
-		return zones:GetAnchors(zoneId)
-	end,
-	exclusions = {
-		ExclusionProviders.TaggedProvider("Structures and interaction points", CollectionService, EXCLUSION_TAG, workspace),
-	},
-	traps = traps,
-})
-
-local analytics = PickupAnalytics.new({ data = playerData, Signal = Signal })
-
-local items -- assigned below; the model factory's touch handler needs it
-local assets = ReplicatedStorage:FindFirstChild("Assets")
-
-items = ItemService.new({
+local eggs = Eggs.Init({
 	config = PickupConfig,
 	itemDefinitions = ItemDefinitions,
-	registry = registry,
-	placement = placement,
-	detection = ZoneDetection,
-	zones = zones,
+	playerData = playerData,
 	inventory = inventory,
-	data = playerData,
-	analytics = analytics,
-	tracks = SpawnTrackRegistry.new({ spawn = task.spawn, cancel = task.cancel }),
-	models = RobloxPickupWorld.newModelFactory({
-		folder = pickupFolder,
-		itemDefinitions = ItemDefinitions,
-		templates = assets and assets:FindFirstChild("Pickups"),
-		pickupRadius = PickupConfig.PickupRadius,
-		onTouched = function(pickupId, player)
-			items:HandleTouch(pickupId, player)
-		end,
-	}),
-	scheduler = { Delay = task.delay, Cancel = task.cancel },
-	now = time, -- elapsed game time; matches task.delay
+	zones = zones,
+	eggRegistry = eggRegistry,
 	rng = rng,
-	getPlayers = getActivePlayers,
-	isPlayerPresent = RobloxPickupWorld.isPlayerPresent,
-	getRootPosition = RobloxPickupWorld.getRootPosition,
-	Signal = Signal,
+	getActivePlayers = getActivePlayers,
 })
 
-local spawner = ZoneSpawner.new({
+--============================================================================
+-- Zones (stage 2: the spawner, which needs eggs)
+
+local spawner = Zones.StartSpawner({
 	config = PickupConfig,
 	zones = zones,
-	items = items,
-	registry = registry,
+	eggs = eggs,
+	eggRegistry = eggRegistry,
 	rng = rng,
 })
+
+--============================================================================
+-- Live services
 
 Services.PlayerData = playerData
 Services.Inventory = inventory
 Services.Zones = zones
-Services.Items = items
-Services.Analytics = analytics
+Services.Eggs = eggs
 
 --============================================================================
 -- Wiring
 
 zones.ZoneRemoved:Connect(function(zoneId)
-	items:RemoveZonePickups(zoneId)
+	eggs:RemoveZonePickups(zoneId)
 	spawner:RemoveZone(zoneId)
 end)
 
@@ -190,7 +118,7 @@ playerData.Ready:Connect(function(player)
 end)
 
 playerData.Releasing:Connect(function(player)
-	items:OnPlayerRemoving(player)
+	eggs:OnPlayerRemoving(player)
 	zones:RemovePlayer(player)
 	inventory:ClearSession(player)
 end)
@@ -199,7 +127,7 @@ inventory.Changed:Connect(function(player, itemTypeId, count, revision)
 	Networker.InventoryChanged.Fire(player, { Revision = revision, ItemTypeId = itemTypeId, Count = count })
 end)
 
-items.Collected:Connect(function(player, record)
+eggs.Collected:Connect(function(player, record)
 	Networker.PickupCollected.Fire(player, {
 		PickupId = record.PickupId,
 		ItemTypeId = record.ItemTypeId,
@@ -208,9 +136,12 @@ items.Collected:Connect(function(player, record)
 	})
 end)
 
-items.InventoryFull:Connect(function(player, itemTypeId)
+eggs.InventoryFull:Connect(function(player, itemTypeId)
 	Networker.InventoryFull.Fire(player, { ItemTypeId = itemTypeId })
 end)
+
+--============================================================================
+-- Player lifecycle
 
 Players.PlayerAdded:Connect(function(player)
 	playerData:LoadAsync(player)
@@ -223,9 +154,12 @@ Players.PlayerRemoving:Connect(function(player)
 	-- Releasing (above) runs the same cleanup before the save ends. The repeat calls are idempotent and
 	-- cover players whose profile never loaded
 	playerData:Release(player)
-	items:OnPlayerRemoving(player)
+	eggs:OnPlayerRemoving(player)
 	zones:RemovePlayer(player)
 end)
+
+--============================================================================
+-- Zone activation. Bound last so ZoneRemoved cleanup is already connected when tagged parts register
 
 zones:BindCollectionService(CollectionService, workspace)
 
@@ -254,7 +188,7 @@ local function logSpawnDebug()
 		end
 		table.insert(
 			lines,
-			`  {zone.ZoneId}: players={zones:GetPopulation(zone.ZoneId)} pickups={registry:CountZone(zone.ZoneId)} `
+			`  {zone.ZoneId}: players={zones:GetPopulation(zone.ZoneId)} pickups={eggRegistry:CountZone(zone.ZoneId)} `
 				.. `outcomes=[{table.concat(outcomes, ", ")}]`
 		)
 	end
@@ -279,18 +213,21 @@ local heartbeat = RunService.Heartbeat:Connect(function(deltaTime)
 	end
 	if spawnElapsed >= schedule.TickInterval then
 		spawnElapsed = 0
-		items:ExpireDue()
+		eggs:ExpireDue()
 		spawner:Step(time())
 	end
 	if sweepElapsed >= PickupConfig.ProximitySweepInterval then
 		sweepElapsed = 0
-		items:SweepProximity()
+		eggs:SweepProximity()
 	end
 end)
+
+--============================================================================
+-- Shutdown
 
 game:BindToClose(function()
 	heartbeat:Disconnect()
 	spawner:Destroy()
-	items:Destroy()
+	eggs:Destroy()
 	zones:Destroy()
 end)

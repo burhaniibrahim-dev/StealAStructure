@@ -7,10 +7,11 @@ return function(pickupConfig)
 
 		Tutorial = {
 			-- Ordinary floor pickups are refused while false. The tutorial flips this via
-			-- ItemService:SetCollectionEnabled when its collection stage starts
+			-- EggService:SetCollectionEnabled when its collection stage starts
 			OrdinaryCollectionEnabled = pickupConfig.Tutorial.DefaultOrdinaryCollectionEnabled,
 		},
 
+		-- Written only by the deferred PickupAnalytics (inactive for MVP). Kept so existing saves stay unchanged
 		Milestones = {
 			FirstScriptedCollection = false,
 			FirstOrdinaryCollection = false,

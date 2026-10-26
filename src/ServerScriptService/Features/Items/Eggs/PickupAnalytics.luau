@@ -1,6 +1,9 @@
 -- Responsibility: Internal pickup analytics. Aggregates egg source totals and emits milestone events.
 -- Nothing here calls a platform analytics API per spawn or per effect; a future analytics feature can
 -- subscribe to Milestone and read GetSourceTotals on its own schedule. Debug logging stays elsewhere.
+--
+-- DEFERRED / INACTIVE (post-MVP): nothing requires or constructs this module at runtime, and EggService no
+-- longer calls RecordCollection. It is kept as a reference; see the post-MVP note in .vibe-wise/project-map.md.
 
 local PickupAnalytics = {}
 PickupAnalytics.__index = PickupAnalytics
@@ -25,7 +28,7 @@ function PickupAnalytics.new(deps)
 	}, PickupAnalytics)
 end
 
--- Called by ItemService after a committed collection
+-- Meant to run after a committed collection. Not called anywhere while analytics is deferred
 function PickupAnalytics:RecordCollection(player, record)
 	local isScripted = record.ReservedUserId ~= nil
 	local source = if isScripted then PickupAnalytics.Source.TutorialFloor else PickupAnalytics.Source.Floor

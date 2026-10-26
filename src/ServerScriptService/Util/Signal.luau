@@ -6,7 +6,7 @@ local Signal = {}
 Signal.__index = Signal
 
 function Signal.new()
-	return setmetatable({ _listeners = {} }, Signal)
+	return setmetatable({ _listeners = {}}, Signal)
 end
 
 function Signal:Connect(listener)

@@ -1,38 +1,20 @@
--- Responsibility: Roblox-side adapters for the pickup system. Ground raycasts, obstruction checks, character
--- lookup, and the server-owned pickup models that replicate through Workspace.
--- Pure modules (PickupPlacement, ItemService) only see the small interfaces built here.
+-- Responsibility: Roblox-side adapters for the egg pickup system. Ground raycasts, obstruction checks, and the
+-- server-owned pickup models that replicate through Workspace.
+-- Pure modules (PickupPlacement, EggService) only see the small interfaces built here.
+-- General player/character lookups live in Util/RobloxPlayers.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Janitor = require(ReplicatedStorage.Packages.Janitor)
+local RobloxPlayers = require(ServerScriptService.Util.RobloxPlayers)
 
 local RobloxPickupWorld = {}
 
 -- Surfaces tagged (or with attribute) NoPickupSpawn never receive pickups
 RobloxPickupWorld.BLOCKED_TAG = "NoPickupSpawn"
-
--- Non-yielding. nil unless the player has a living character with a HumanoidRootPart
-function RobloxPickupWorld.getRootPosition(player)
-	local character = player.Character
-	if not character then
-		return nil
-	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") then
-		return nil
-	end
-	return root.Position
-end
-
-function RobloxPickupWorld.isPlayerPresent(player)
-	return player.Parent == Players
-end
 
 local function getCharacters()
 	local characters = {}
@@ -84,7 +66,7 @@ function RobloxPickupWorld.newWorld(options)
 	function adapter:GetCharacterPositions()
 		local positions = {}
 		for _, player in Players:GetPlayers() do
-			local position = RobloxPickupWorld.getRootPosition(player)
+			local position = RobloxPlayers.getRootPosition(player)
 			if position then
 				table.insert(positions, position)
 			end

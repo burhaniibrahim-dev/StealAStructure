@@ -1,6 +1,6 @@
 -- Responsibility: Ordinary floor spawn scheduling. One timer per zone, driven by that zone's population.
 -- Supply scales with players in a zone up to a cap, rather than one loop per player, so a crowd can't
--- create unlimited shared supply. Owns per-zone budgets, weighted item choice, and bounded placement retries.
+-- create unlimited shared supply. Owns per-zone budgets, weighted egg type choice, and bounded placement retries.
 --
 -- Budget(zone, population)   = min(MaxPickups, BasePickups + PickupsPerExtraPlayer * (min(pop, PopulationCap) - 1))
 -- Interval(zone, population) = random(SpawnInterval) / min(1 + RatePerExtraPlayer * (min(pop, cap) - 1), MaxRateMultiplier)
@@ -9,13 +9,13 @@
 local ZoneSpawner = {}
 ZoneSpawner.__index = ZoneSpawner
 
--- deps: config (PickupConfig), zones (ZoneService), items (ItemService), registry (ItemRegistry), rng
+-- deps: config (PickupConfig), zones (ZoneService), eggs (EggService), eggRegistry (same as EggService), rng
 function ZoneSpawner.new(deps)
 	return setmetatable({
 		_config = deps.config,
 		_zones = deps.zones,
-		_items = deps.items,
-		_registry = deps.registry,
+		_eggs = deps.eggs,
+		_eggRegistry = deps.eggRegistry,
 		_rng = deps.rng,
 		_nextSpawnAt = {}, -- [ZoneId] = time
 		_stats = {}, -- [ZoneId] = { [outcome] = count }; debug only, see TakeStats
@@ -87,11 +87,11 @@ function ZoneSpawner:SpawnInZone(zoneId)
 		return nil, "NoProfile"
 	end
 	local budget = ZoneSpawner.ComputeBudget(profile, self._zones:GetPopulation(zoneId), self._config.Schedule)
-	if self._registry:CountZone(zoneId) >= budget then
+	if self._eggRegistry:CountZone(zoneId) >= budget then
 		self:_count(zoneId, "ZoneBudget")
 		return nil, "ZoneBudget"
 	end
-	if self._registry:CountOrdinary() >= self._config.ServerMaxPickups then
+	if self._eggRegistry:CountOrdinary() >= self._config.ServerMaxPickups then
 		self:_count(zoneId, "ServerBudget")
 		return nil, "ServerBudget"
 	end
@@ -99,7 +99,7 @@ function ZoneSpawner:SpawnInZone(zoneId)
 	local entry = ZoneSpawner.PickWeighted(profile.Distribution, self._rng)
 	local amount = self._rng:NextInteger(entry.Amount.Min, entry.Amount.Max)
 	for _ = 1, self._config.Placement.MaxAttempts do
-		local record, reason, detail = self._items:TrySpawnOrdinary(zoneId, entry.ItemTypeId, amount, budget)
+		local record, reason, detail = self._eggs:TrySpawnOrdinary(zoneId, entry.ItemTypeId, amount, budget)
 		if record then
 			self:_count(zoneId, "Spawned")
 			return record
@@ -120,7 +120,7 @@ function ZoneSpawner:Step(now)
 		local zoneId = zone.ZoneId
 		local population = self._zones:GetPopulation(zoneId)
 		if population <= 0 or self:GetProfile(zoneId) == nil then
-			self._nextSpawnAt[zoneId] = nil
+			self._nextSpawnAt[zoneId] = 	nil
 			continue
 		end
 

@@ -7,6 +7,5 @@ return {
 	PlayerData = nil,
 	Inventory = nil,
 	Zones = nil,
-	Items = nil,
-	Analytics = nil,
+	Eggs = nil,
 }

@@ -19,7 +19,7 @@ describe("Placement", function()
 		eq(record, nil, "spawned on water")
 		eq(reason, "PlacementExhausted", "reason")
 		eq(sys.world.raycasts, sys.config.Placement.MaxAttempts, "bounded attempts")
-		eq(sys.registry:Count(), 0, "nothing registered")
+		eq(sys.eggRegistry:Count(), 0, "nothing registered")
 
 		-- Next opportunity tries again and succeeds once the ground is valid
 		sys.world.material = "Snow"
@@ -152,17 +152,17 @@ describe("Population budgets", function()
 		for step = 0, 400 do
 			sys.spawner:Step(step * 0.25)
 		end
-		eq(sys.registry:CountZone("Meadow"), budget, "filled exactly to budget")
+		eq(sys.eggRegistry:CountZone("Meadow"), budget, "filled exactly to budget")
 
 		-- Two players leave; the budget drops and no new pickups appear until it frees up
 		sys.removePlayer(sys.players[1])
 		sys.removePlayer(sys.players[2])
 		sys.zones:Poll()
-		local count = sys.registry:CountZone("Meadow")
+		local count = sys.eggRegistry:CountZone("Meadow")
 		for step = 401, 500 do
 			sys.spawner:Step(step * 0.25)
 		end
-		eq(sys.registry:CountZone("Meadow"), count, "no growth above the smaller budget")
+		eq(sys.eggRegistry:CountZone("Meadow"), count, "no growth above the smaller budget")
 	end)
 
 	it("an empty zone spawns nothing and the server cap holds", function()
@@ -173,14 +173,14 @@ describe("Population budgets", function()
 		for step = 0, 100 do
 			sys.spawner:Step(step)
 		end
-		eq(sys.registry:Count(), 0, "no players, no spawns")
+		eq(sys.eggRegistry:Count(), 0, "no players, no spawns")
 
 		sys.addPlayer("A", Vector3.new(-19, 3, -19))
 		sys.zones:Poll()
 		for step = 101, 300 do
 			sys.spawner:Step(step)
 		end
-		eq(sys.registry:CountOrdinary(), 2, "server-wide cap")
+		eq(sys.eggRegistry:CountOrdinary(), 2, "server-wide cap")
 	end)
 
 	it("weighted choice follows configured weights", function()
