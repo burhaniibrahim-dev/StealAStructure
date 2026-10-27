@@ -153,6 +153,7 @@ function RobloxPickupWorld.newModelFactory(options)
 			model:SetAttribute("ReservedUserId", record.ReservedUserId)
 		end
 
+		--Creating a hitbox
 		local hitbox = Instance.new("Part")
 		hitbox.Name = "Hitbox"
 		hitbox.Shape = Enum.PartType.Ball

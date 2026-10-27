@@ -13,8 +13,8 @@ local InventoryState = require(ReplicatedStorage.Shared.Inventory.InventoryState
 local player = game.Players.LocalPlayer
 local playerScripts = player:WaitForChild("PlayerScripts")
 
-local PickupVisuals = require(playerScripts:WaitForChild("Controllers").PickupVisuals)
-local InventoryHud = require(playerScripts.UI.InventoryHud)
+local PickupVisuals = require(ReplicatedStorage.Shared.Visuals.PickupVisuals)
+local InventoryHud = require(ReplicatedStorage.Assets.UI.InventoryHud)
 ------------------------------------------------------------
 
 --=====================================================================

@@ -9,7 +9,7 @@ return {
 	DebugLogInterval = 5,
 
 	-- Lifetime and supply --------------------------------------------------
-	PickupLifetime = 45, -- ordinary floor eggs despawn after this long
+	PickupLifetime = 30, -- ordinary floor eggs despawn after this long
 	ServerMaxPickups = 150, -- ordinary pickups alive across the whole server
 
 	-- Collection -----------------------------------------------------------
