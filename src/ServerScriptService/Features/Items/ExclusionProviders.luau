@@ -5,7 +5,7 @@
 --   provider.IsPlaceholder: boolean?   true when the provider exists only to fill the slot
 --   provider:IsExcluded(position: Vector3, padding: number): boolean
 --
--- The trap system doesn't exist yet. NoTrapsProvider fills the trap slot and excludes nothing; Runner
+-- The trap system doesn't exist yet. NoTrapsProvider fills the trap slot and excludes nothing; Runner.Eggs
 -- warns at startup while it is in use, so trap avoidance is never mistaken for finished.
 -- When traps ship, pass a provider over active trap volumes (VolumeProvider fits) as `traps`.
 

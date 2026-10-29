@@ -10,13 +10,16 @@ Roblox winter-themed shared-map PvP simulator (StealAStructure). Players collect
 - Every inventory mutation needs an active loaded profile; client never chooses rarity/amount/position.
 
 ## Components (implemented)
-- Runner.server.luau — composition root; one Heartbeat drives zone poll (0.3s), spawner + ExpireDue, proximity sweep.
-- Services.luau — handles to live services for other features.
+- Runner (Script, on disk Runner/init.server.luau) — composition root: init order, shared instances (EggRegistry, Random), the single InventoryService, Services publication, wiring, player lifecycle, zone tag binding, one Heartbeat (zone poll 0.3s, ExpireDue + spawner step, proximity sweep), debug log, shutdown.
+  - Child setup ModuleScripts: Runner.Data (-> Data._Players builds ProfileStore adapter + PlayerDataService), Runner.Zones (Init -> ZoneService; StartSpawner -> ZoneSpawner, after eggs), Runner.Eggs (pickup folder, placement, exclusions, Roblox adapters, tracks, EggService).
+- Services.luau — handles to live services for other features: PlayerData, Inventory, Zones, Eggs.
 - Configs/PickupConfig (server-only rules), Configs/ConfigValidator.
 - Features/Data: PlayerDataService (ProfileStore, fail closed), DataTemplate.
 - Features/Inventory/InventoryService — only balance owner; revisioned.
 - Features/Zones: ZoneService (stable ZoneId attribute, membership, population, anchors), ZoneDetection (pure geometry), ZoneSpawner (per-zone timers + budgets), SpawnTrackRegistry (personal tutorial sessions).
-- Features/Items: ItemRegistry (records + indexes), ItemService (lifecycle, atomic collect), PickupPlacement, ExclusionProviders (NoTrapsProvider placeholder), PickupAnalytics, RobloxPickupWorld (Roblox adapters).
+- Features/Items/Eggs: EggRegistry (records + indexes), EggService (floor egg lifecycle, atomic collect), PickupPlacement, ExclusionProviders (NoTrapsProvider placeholder), RobloxPickupWorld (Roblox adapters), PickupAnalytics (deferred, inactive).
+- Features/Items/Tools: empty placeholder for troll tools (bear traps etc.); nothing implemented.
+- Util: Signal, RobloxPlayers (getRootPosition, isPlayerPresent; shared by data, zones, eggs).
 - Shared: Configs/Items/ItemDefinitions (presentation + MAX_STACK), Inventory/InventoryState (client revision guard).
 - Client: Client.client.luau, Controllers/PickupVisuals, UI/InventoryHud (React).
 - Blink events: InventorySnapshot, InventoryChanged, PickupCollected, InventoryFull (all server -> owning client, reliable).
@@ -24,8 +27,8 @@ Roblox winter-themed shared-map PvP simulator (StealAStructure). Players collect
 
 ## Main Flow
 Server poll: root position -> ZoneDetection.Find -> membership/population
-ZoneSpawner (per zone, population-scaled) -> ItemService:TrySpawnOrdinary -> PickupPlacement -> ItemRegistry + server model in Workspace.Pickups
-Touch or sweep (server) -> ItemService:TryCollect -> InventoryService:TryAdd -> Blink to owner
+ZoneSpawner (per zone, population-scaled) -> EggService:TrySpawnOrdinary -> PickupPlacement -> EggRegistry + server model in Workspace.Pickups
+Touch or sweep (server) -> EggService:TryCollect -> InventoryService:TryAdd -> Blink to owner
 
 ## Data and Trust Boundaries
 Server owns inventory, pickup eligibility, spawn outcomes, timing. Client only renders (bob/spin, effects, HUD, hides others' reserved pickups). Clients send nothing for pickups.
@@ -34,4 +37,16 @@ Server owns inventory, pickup eligibility, spawn outcomes, timing. Client only r
 Rojo `default.project.json` (ServerPackages mapped under ServerScriptService). Toolchain `rokit.toml`; stylua/selene pinned but not trusted/installed locally as of 2026-10-24.
 
 ## Unknowns / integration dependencies
-- Trap system (replace NoTrapsProvider), tutorial feature (calls ItemService tutorial API), throwing (InventoryService:TryConsume), movement validation, platform analytics sink.
+- Trap system (replace NoTrapsProvider), tutorial feature (calls EggService tutorial API via Services.Eggs), throwing (InventoryService:TryConsume), movement validation, platform analytics sink.
+
+## Post-MVP: pickup analytics (deferred, 2026-10-26)
+- Status: retained but inactive. Module: src/ServerScriptService/Features/Items/Eggs/PickupAnalytics.luau. Nothing requires or constructs it at runtime; not published in Services.
+- What it tracks: server-wide (not per-player) collection totals by source (Floor / TutorialFloor) and egg type; first ordinary and first scripted collection per player, stored as profile flags Milestones.FirstOrdinaryCollection / FirstScriptedCollection (fields kept in DataTemplate, no migration); a Milestone signal.
+- Integration removed from: EggService:TryCollect (the RecordCollection call after a committed collection), its `analytics` dependency, Runner construction, and Services.Analytics.
+- Not a quest/progression system. Future quests would likely need per-player counters and further design; nothing about that is decided.
+
+## Post-launch polish: rolling egg timer (deferred, 2026-10-29)
+- Status: built but not wired for launch, by learner's choice ("polish, keep it here"). Eggs keep their authored Studio TextAttachment UI.
+- Modules: src/ReplicatedStorage/Assets/UI/EggTimer.luau (React countdown: per-digit slide-down, 0.15 s, only changed digits move, leftover digit slides out and re-centres, fixed "s", stops at 0) and EggBillboard.luau (copies the authored TextAttachment UI into React, Timer -> EggTimer).
+- To enable: require EggBillboard in Client.client.luau and uncomment the `decorate` hook passed to SpawningVisuals.new. SpawningVisuals' `decorate` dependency stays in place (optional, unused at launch).
+- Not verified in Studio; reviewed by reading only.

@@ -161,7 +161,11 @@ local Queue: any = {
 
 local SerdesEvent = "?"
 local SerdesThread: thread?
+Queue.Reliable[5] = table.create(256)
+Queue.Reliable[6] = table.create(256)
 export type ItemCounts = {[string]: number}
+export type EggRecord = { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }
+export type EggRemovedReason = ("Collected" | "Expired" | "ZoneRemoved" | "Removed")
 function SerdesFunctions.WriteEVENT_InventorySnapshot(Value: { Revision: number, MaxStack: number, Counts: {[string]: number} }): ()
 	-- Allocate BLOCK: 9 bytes
 	local BLOCK_START = Allocate(9)
@@ -194,26 +198,118 @@ function SerdesFunctions.WriteEVENT_InventoryChanged(Value: { Revision: number, 
 	buffer.writeu16(SendBuffer, BLOCK_START + 6, Value.Count)
 end
 
-function SerdesFunctions.WriteEVENT_PickupCollected(Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
-	-- Allocate BLOCK: 20 bytes
-	local BLOCK_START = Allocate(20)
+function SerdesFunctions.WriteEVENT_EggSnapshot(Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }): ()
+	-- Allocate BLOCK: 7 bytes
+	local BLOCK_START = Allocate(7)
 	buffer.writeu8(SendBuffer, BLOCK_START + 0, 2)
+	buffer.writef32(SendBuffer, BLOCK_START + 1, Value.TriggerRadius)
+	-- START ARRAY
+	buffer.writeu16(SendBuffer, BLOCK_START + 5, #Value.Eggs)
+		-- Allocate BLOCK: 24 bytes
+	local ARRAY_START_1 = Allocate(24 * #Value.Eggs)
+	for Index = 1, #Value.Eggs do
+		local Item_1 = Value.Eggs[Index]
+		-- Allocate 4
+		local OPERATION_OFFSET_0 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		buffer.writeu32(SendBuffer, OPERATION_OFFSET_0, Item_1.PickupId)
+		local Length = #Item_1.ItemTypeId
+		-- Allocate 1
+		local OPERATION_OFFSET_1 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		buffer.writeu8(SendBuffer, OPERATION_OFFSET_1, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Item_1.ItemTypeId, Length)
+		-- Allocate 2
+		local OPERATION_OFFSET_2 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		buffer.writeu16(SendBuffer, OPERATION_OFFSET_2, Item_1.Amount)
+		local Length = #Item_1.ZoneId
+		-- Allocate 1
+		local OPERATION_OFFSET_3 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		buffer.writeu8(SendBuffer, OPERATION_OFFSET_3, Length)
+		Allocate(Length)
+		buffer.writestring(SendBuffer, SendOffset, Item_1.ZoneId, Length)
+		local Vector = Item_1.Position
+		-- Allocate 4
+		local OPERATION_OFFSET_4 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		buffer.writef32(SendBuffer, OPERATION_OFFSET_4, Vector.X)
+		-- Allocate 4
+		local OPERATION_OFFSET_5 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		buffer.writef32(SendBuffer, OPERATION_OFFSET_5, Vector.Y)
+		-- Allocate 4
+		local OPERATION_OFFSET_6 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		buffer.writef32(SendBuffer, OPERATION_OFFSET_6, Vector.Z)
+		-- Allocate 4
+		local OPERATION_OFFSET_7 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		buffer.writef32(SendBuffer, OPERATION_OFFSET_7, Item_1.RemainingLifetime)
+	end
+	-- END ARRAY
+end
+
+function SerdesFunctions.WriteEVENT_EggSpawned(Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }): ()
+	-- Allocate BLOCK: 25 bytes
+	local BLOCK_START = Allocate(25)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
 	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.PickupId)
 	local Length = #Value.ItemTypeId
 	buffer.writeu8(SendBuffer, BLOCK_START + 5, Length)
 	Allocate(Length)
 	buffer.writestring(SendBuffer, SendOffset, Value.ItemTypeId, Length)
 	buffer.writeu16(SendBuffer, BLOCK_START + 6, Value.Amount)
+	local Length = #Value.ZoneId
+	buffer.writeu8(SendBuffer, BLOCK_START + 8, Length)
+	Allocate(Length)
+	buffer.writestring(SendBuffer, SendOffset, Value.ZoneId, Length)
 	local Vector = Value.Position
-	buffer.writef32(SendBuffer, BLOCK_START + 8, Vector.X)
-	buffer.writef32(SendBuffer, BLOCK_START + 12, Vector.Y)
-	buffer.writef32(SendBuffer, BLOCK_START + 16, Vector.Z)
+	buffer.writef32(SendBuffer, BLOCK_START + 9, Vector.X)
+	buffer.writef32(SendBuffer, BLOCK_START + 13, Vector.Y)
+	buffer.writef32(SendBuffer, BLOCK_START + 17, Vector.Z)
+	buffer.writef32(SendBuffer, BLOCK_START + 21, Value.RemainingLifetime)
+end
+
+function SerdesFunctions.WriteEVENT_EggRemoved(Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }): ()
+	-- Allocate BLOCK: 6 bytes
+	local BLOCK_START = Allocate(6)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 4)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.PickupId)
+	if Value.Reason == "Collected" then
+		buffer.writeu8(SendBuffer, BLOCK_START + 5, 0)
+	elseif Value.Reason == "Expired" then
+		buffer.writeu8(SendBuffer, BLOCK_START + 5, 1)
+	elseif Value.Reason == "ZoneRemoved" then
+		buffer.writeu8(SendBuffer, BLOCK_START + 5, 2)
+	elseif Value.Reason == "Removed" then
+		buffer.writeu8(SendBuffer, BLOCK_START + 5, 3)
+	else
+		error(`Unexpected enum: {Value.Reason}, expected one of "Collected" or "Expired" or "ZoneRemoved" or "Removed".`)
+	end
+end
+
+function SerdesFunctions.ReadEVENT_RequestEggSnapshot(): (number)
+	-- Read BLOCK: 1 bytes
+	local BLOCK_START = Read(1)
+	local Value = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_CollectEgg(): ({ PickupId: number })
+	-- Read BLOCK: 4 bytes
+	local BLOCK_START = Read(4)
+	local Value = {} :: any
+	Value.PickupId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	return Value
 end
 
 function SerdesFunctions.WriteEVENT_InventoryFull(Value: { ItemTypeId: string }): ()
 	-- Allocate BLOCK: 2 bytes
 	local BLOCK_START = Allocate(2)
-	buffer.writeu8(SendBuffer, BLOCK_START + 0, 3)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 7)
 	local Length = #Value.ItemTypeId
 	buffer.writeu8(SendBuffer, BLOCK_START + 1, Length)
 	Allocate(Length)
@@ -235,11 +331,29 @@ if not RunService:IsRunning() then
 		FireList = NOOP,
 		FireExcept = NOOP
 	},
-	PickupCollected = {
+	EggSnapshot = {
 		Fire = NOOP,
 		FireAll = NOOP,
 		FireList = NOOP,
 		FireExcept = NOOP
+	},
+	EggSpawned = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	EggRemoved = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	RequestEggSnapshot = {
+		On = NOOP
+	},
+	CollectEgg = {
+		On = NOOP
 	},
 	InventoryFull = {
 		Fire = NOOP,
@@ -309,6 +423,29 @@ Reliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instance
 		-- Read BLOCK: 1 bytes
 		local BLOCK_START = Read(1)
 		local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 0)
+		if Index == 5 then
+			local Value: number = SerdesFunctions.ReadEVENT_RequestEggSnapshot()
+			if Events.Reliable[5] ~= nil then
+				SerdesEvent = "RequestEggSnapshot"
+				Events.Reliable[5](Player, Value)
+			else
+				if #Queue.Reliable[5] > 256 then
+					warn("[Blink]: Event queue of \"RequestEggSnapshot\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[5], {Player, Value} :: {any})
+			end
+		elseif Index == 6 then
+			local Value: { PickupId: number } = SerdesFunctions.ReadEVENT_CollectEgg()
+			if Events.Reliable[6] ~= nil then
+				SerdesEvent = "CollectEgg"
+				Events.Reliable[6](Player, Value)
+			else
+				if #Queue.Reliable[6] > 256 then
+					warn("[Blink]: Event queue of \"CollectEgg\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[6], {Player, Value} :: {any})
+			end
+		end
 	end
 end)
 Unreliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instances: {Instance})
@@ -425,15 +562,15 @@ local Returns = table.freeze({
 			end
 		end,
 	},
-	PickupCollected = {
-		Fire = function(Player: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+	EggSnapshot = {
+		Fire = function(Player: Player, Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }): ()
 			Load(PlayersMap[Player])
-			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			SerdesFunctions.WriteEVENT_EggSnapshot(Value)
 			PlayersMap[Player] = Save()
 		end,
-		FireAll = function(Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+		FireAll = function(Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }): ()
 			Load()
-			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			SerdesFunctions.WriteEVENT_EggSnapshot(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
 			for _, Player in Players:GetPlayers() do
 				Load(PlayersMap[Player])
@@ -443,9 +580,9 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireList = function(List: {Player}, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+		FireList = function(List: {Player}, Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }): ()
 			Load()
-			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			SerdesFunctions.WriteEVENT_EggSnapshot(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
 			for _, Player in List do
 				Load(PlayersMap[Player])
@@ -455,9 +592,9 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
-		FireExcept = function(Except: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }): ()
+		FireExcept = function(Except: Player, Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }): ()
 			Load()
-			SerdesFunctions.WriteEVENT_PickupCollected(Value)
+			SerdesFunctions.WriteEVENT_EggSnapshot(Value)
 			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
 			for _, Player in Players:GetPlayers() do
 				if Player == Except then
@@ -470,6 +607,126 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
+	},
+	EggSpawned = {
+		Fire = function(Player: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_EggSpawned(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggSpawned(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggSpawned(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggSpawned(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	EggRemoved = {
+		Fire = function(Player: Player, Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_EggRemoved(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggRemoved(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggRemoved(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_EggRemoved(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	RequestEggSnapshot = {
+		On = function(Listener: (Player: Player, Value: number) -> ()): () -> ()
+			Events.Reliable[5] = Listener
+			for Index, Arguments in Queue.Reliable[5] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[5] = {}
+			return function (): ()
+				if Events.Reliable[5] == Listener then
+					Events.Reliable[5] = nil
+				end
+			end
+		end
+	},
+	CollectEgg = {
+		On = function(Listener: (Player: Player, Value: { PickupId: number }) -> ()): () -> ()
+			Events.Reliable[6] = Listener
+			for Index, Arguments in Queue.Reliable[6] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[6] = {}
+			return function (): ()
+				if Events.Reliable[6] == Listener then
+					Events.Reliable[6] = nil
+				end
+			end
+		end
 	},
 	InventoryFull = {
 		Fire = function(Player: Player, Value: { ItemTypeId: string }): ()

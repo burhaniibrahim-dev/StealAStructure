@@ -4,7 +4,7 @@
 --
 -- Sessions are keyed by (UserId, key). Opening a key that is already open closes the old session first,
 -- so a session is never overwritten without cleanup. Respawning doesn't touch sessions (they aren't tied
--- to the character), and ItemService closes them all on PlayerRemoving.
+-- to the character), and EggService closes them all on PlayerRemoving.
 
 local SpawnTrackRegistry = {}
 SpawnTrackRegistry.__index = SpawnTrackRegistry

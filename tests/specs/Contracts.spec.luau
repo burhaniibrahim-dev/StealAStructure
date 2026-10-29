@@ -1,35 +1,119 @@
 local TestKit = require("../TestKit")
 local describe, it, eq, truthy, falsy = TestKit.describe, TestKit.it, TestKit.eq, TestKit.truthy, TestKit.falsy
 
-local ConfigValidator = require("../../src/ServerScriptService/Configs/ConfigValidator")
-local PickupConfig = require("../../src/ServerScriptService/Configs/PickupConfig")
-local ItemDefinitions = require("../../src/ReplicatedStorage/Shared/Configs/Items/ItemDefinitions")
-local InventoryState = require("../../src/ReplicatedStorage/Shared/Inventory/InventoryState")
+local ConfigValidator = TestKit.ConfigValidator
+local InventoryState = require("../../src/ReplicatedStorage/Shared/Features/Inventory/InventoryState")
 local PlayerDataService = require("../../src/ServerScriptService/Features/Data/PlayerDataService")
+local DataTemplate = require("../../src/ServerScriptService/Features/Data/DataTemplate")
+
+local function shippedInputs()
+	return {
+		itemCatalog = require("../../src/ReplicatedStorage/Shared/Configs/ItemDefintions"),
+		inventoryConfig = require("../../src/ReplicatedStorage/Shared/Configs/InventoryConfig"),
+		pickupConfig = require("../../src/ServerScriptService/Configs/Eggs/PickupConfig"),
+		placementConfig = require("../../src/ServerScriptService/Configs/Eggs/PlacementConfig"),
+		spawnerConfig = require("../../src/ServerScriptService/Configs/Zones/SpawnerConfig"),
+		zoneIdConfig = require("../../src/ServerScriptService/Configs/Zones/IdConfig"),
+		tutorialConfig = require("../../src/ServerScriptService/Configs/TutorialConfig"),
+		debugConfig = require("../../src/ServerScriptService/Configs/DebugConfig"),
+		hasTemplate = function()
+			return true
+		end,
+	}
+end
+
+local function fixtureInputs()
+	local inputs = TestKit.Configs()
+	inputs.itemCatalog = TestKit.ItemCatalog()
+	return inputs
+end
 
 describe("Config validation", function()
-	it("accepts the shipped config", function()
-		local ok, errors = ConfigValidator.validate(PickupConfig, ItemDefinitions)
+	it("accepts the shipped configs", function()
+		local ok, errors = ConfigValidator.validate(shippedInputs())
 		truthy(ok, table.concat(errors, "; "))
 	end)
 
-	it("rejects bad weights, unknown items, bad ranges, and a missing fallback", function()
-		local config = TestKit.Config()
-		config.Zones.Default.Distribution[1].Weight = 0
-		config.Zones.Default.Distribution[2].ItemTypeId = "GhostEgg"
-		config.Schedule.SpawnInterval = { Min = 5, Max = 1 }
-		config.FallbackZoneProfile = "Missing"
-		config.Placement.MaxAttempts = 0
-		local ok, errors = ConfigValidator.validate(config, TestKit.ItemDefinitions())
+	it("the catalog is pure: every top-level key is an egg with a model", function()
+		local inputs = shippedInputs()
+		for itemTypeId, definition in inputs.itemCatalog do
+			eq(type(definition), "table", `{itemTypeId} is an egg entry`)
+			eq(type(definition.ModelName), "string", `{itemTypeId}.ModelName`)
+		end
+		eq(inputs.itemCatalog.MAX_STACK, nil, "MAX_STACK lives in InventoryConfig")
+		eq(ConfigValidator.findVisualFallback(inputs.itemCatalog), "Common", "configured visual fallback")
+	end)
+
+	it("reports bad values by file and field", function()
+		local inputs = fixtureInputs()
+		inputs.zoneIdConfig.Zones.Default[1].Weight = 0
+		inputs.zoneIdConfig.Zones.Default[2].ItemTypeId = "GhostEgg"
+		inputs.zoneIdConfig.Zones.Default[1].Amount = { Min = 1, Max = 500 }
+		inputs.zoneIdConfig.FallbackZoneProfile = "Missing"
+		inputs.spawnerConfig.SpawnInterval = { Min = 5, Max = 1 }
+		inputs.spawnerConfig.PlacementAttempts = 0
+		inputs.spawnerConfig.BasePickups = 10 -- above MaxPickups
+		inputs.pickupConfig.CollectRadius = 1 -- below PickupRadius
+		local ok, errors = ConfigValidator.validate(inputs)
 		falsy(ok, "valid")
 		local text = table.concat(errors, "\n")
-		truthy(text:find("Weight must be > 0"), "weight")
-		truthy(text:find("GhostEgg"), "unknown item")
-		truthy(text:find("SpawnInterval"), "range")
-		truthy(text:find("FallbackZoneProfile"), "fallback")
-		truthy(text:find("MaxAttempts"), "attempts")
-		local raised = pcall(ConfigValidator.assert, config, TestKit.ItemDefinitions())
-		falsy(raised, "assert raises")
+		truthy(text:find("IdConfig.Zones.Default[1].Weight must be > 0", 1, true), "weight")
+		truthy(text:find('"GhostEgg" is not in ItemDefintions', 1, true), "unknown item")
+		truthy(text:find("Amount.Max must be <= InventoryConfig.MAX_STACK", 1, true), "amount within stack")
+		truthy(text:find("IdConfig.FallbackZoneProfile", 1, true), "fallback")
+		truthy(text:find("SpawnerConfig.SpawnInterval", 1, true), "range")
+		truthy(text:find("SpawnerConfig.PlacementAttempts", 1, true), "attempts")
+		truthy(text:find("BasePickups must be <= MaxPickups", 1, true), "target under the hard cap")
+		truthy(text:find("PickupConfig.CollectRadius must be >= PickupRadius", 1, true), "trigger inside server range")
+		falsy(pcall(ConfigValidator.assert, inputs), "assert raises")
+	end)
+
+	it("survives malformed tables without crashing", function()
+		local inputs = fixtureInputs()
+		inputs.zoneIdConfig.Zones = { Default = "oops", Other = { "not an entry" } }
+		inputs.spawnerConfig = nil
+		inputs.itemCatalog.IceEgg = 5
+		local ok, errors = ConfigValidator.validate(inputs)
+		falsy(ok, "valid")
+		local text = table.concat(errors, "\n")
+		truthy(text:find("IdConfig.Zones.Default must be a table", 1, true), "profile type")
+		truthy(text:find("IdConfig.Zones.Other[1] must be a table", 1, true), "entry type")
+		truthy(text:find("SpawnerConfig must be a table", 1, true), "missing file")
+		truthy(text:find("ItemDefintions.IceEgg must be a table", 1, true), "catalog entry type")
+	end)
+
+	it("a missing template is a startup error with the exact wording", function()
+		local inputs = fixtureInputs()
+		inputs.hasTemplate = function(modelName)
+			return modelName ~= "IceEgg"
+		end
+		local ok, errors = ConfigValidator.validate(inputs)
+		falsy(ok, "valid")
+		eq(errors[1], "MODEL OF IceEgg doesnt exist", "message")
+	end)
+
+	it("requires exactly one visual fallback egg", function()
+		local inputs = fixtureInputs()
+		inputs.itemCatalog.IceEgg.VisualFallback = true
+		local _, errors = ConfigValidator.validate(inputs)
+		truthy(table.concat(errors, "\n"):find("exactly one entry with VisualFallback", 1, true), "two fallbacks")
+	end)
+
+	it("does not validate removed mechanics", function()
+		local inputs = fixtureInputs()
+		inputs.pickupConfig.SweepRadius = nil
+		inputs.spawnerConfig.PopulationCap = nil
+		local ok, errors = ConfigValidator.validate(inputs)
+		truthy(ok, table.concat(errors, "; "))
+	end)
+end)
+
+describe("Profile template", function()
+	it("seeds the saved tutorial flag from TutorialConfig without changing saved keys", function()
+		local template = DataTemplate(false)
+		eq(template.Tutorial.OrdinaryCollectionEnabled, false, "seeded")
+		eq(type(template.Inventory), "table", "Inventory")
+		eq(template.Milestones.FirstOrdinaryCollection, false, "Milestones kept")
 	end)
 end)
 
