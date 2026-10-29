@@ -1,15 +1,14 @@
--- Responsibility: Roblox-side adapters for the egg pickup system. Ground raycasts, obstruction checks, and the
--- server-owned pickup models that replicate through Workspace.
--- Pure modules (PickupPlacement, EggService) only see the small interfaces built here.
--- General player/character lookups live in Util/RobloxPlayers.
+-- Responsibility: Roblox-side adapters for the egg system. Ground raycasts, obstruction checks, character
+-- positions, and the authored template lookup. The server never builds egg models: each owner's client clones
+-- its own from ReplicatedStorage.Assets.Eggs.PickUps.
+-- Pure modules (PickupPlacement, EggService, ZoneSpawner) only see the small interfaces built here.
+-- General player/character lookups live in Features/Util/RobloxPlayers.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local Janitor = require(ReplicatedStorage.Packages.Janitor)
-local RobloxPlayers = require(ServerScriptService.Util.RobloxPlayers)
+local RobloxPlayers = require(ServerScriptService.Features.Util.RobloxPlayers)
 
 local RobloxPickupWorld = {}
 
@@ -26,13 +25,12 @@ local function getCharacters()
 	return characters
 end
 
--- options: { workspace, pickupFolder, zoneTag }
+-- options: { workspace, zoneTag }
 function RobloxPickupWorld.newWorld(options)
 	local world = options.workspace
 
 	local function ignoredInstances()
 		local ignored = getCharacters()
-		table.insert(ignored, options.pickupFolder)
 		for _, zonePart in CollectionService:GetTagged(options.zoneTag) do
 			table.insert(ignored, zonePart)
 		end
@@ -97,100 +95,23 @@ function RobloxPickupWorld.newWorld(options)
 	return adapter
 end
 
-local function makeFallbackVisual(definition)
-	local egg = Instance.new("Part")
-	egg.Name = "Visual"
-	egg.Size = Vector3.new(1.4, 1.8, 1.4)
-	egg.Color = definition.Color
-	egg.Material = Enum.Material.SmoothPlastic
-	local mesh = Instance.new("SpecialMesh")
-	mesh.MeshType = Enum.MeshType.Sphere
-	mesh.Parent = egg
-	return egg
-end
-
-local function makeVisual(definition, templates)
-	local template = templates and templates:FindFirstChild(definition.ModelName)
-	if template and (template:IsA("BasePart") or template:IsA("Model")) then
-		local visual = template:Clone()
-		visual.Name = "Visual"
-		return visual
-	end
-	return makeFallbackVisual(definition)
-end
-
-local function makeInert(instance)
-	local parts = if instance:IsA("BasePart") then { instance } else {}
-	for _, descendant in instance:GetDescendants() do
-		if descendant:IsA("BasePart") then
-			table.insert(parts, descendant)
-		end
-	end
-	for _, part in parts do
-		part.Anchored = true
-		part.CanCollide = false
-		part.CanTouch = false
-		part.CanQuery = false
-	end
-end
-
--- options: { folder, itemDefinitions, templates: Instance?, pickupRadius, onTouched: (pickupId, player) -> () }
--- Returns { Create(record) -> cleanup }. Each pickup's model and touch connection belong to one Janitor.
-function RobloxPickupWorld.newModelFactory(options)
-	local factory = {}
-
-	function factory.Create(record)
-		local definition = options.itemDefinitions.Items[record.ItemTypeId]
-		local janitor = Janitor.new()
-
-		local model = Instance.new("Model")
-		model.Name = `Pickup_{record.PickupId}`
-		model:SetAttribute("PickupId", record.PickupId)
-		model:SetAttribute("ItemTypeId", record.ItemTypeId)
-		model:SetAttribute("Amount", record.Amount)
-		if record.ReservedUserId then
-			-- Clients hide pickups reserved for someone else
-			model:SetAttribute("ReservedUserId", record.ReservedUserId)
-		end
-
-		--Creating a hitbox
-		local hitbox = Instance.new("Part")
-		hitbox.Name = "Hitbox"
-		hitbox.Shape = Enum.PartType.Ball
-		hitbox.Size = Vector3.one * options.pickupRadius * 2
-		hitbox.CFrame = CFrame.new(record.Position)
-		hitbox.Transparency = 1
-		hitbox.Anchored = true
-		hitbox.CanCollide = false
-		hitbox.CanQuery = false
-		hitbox.CanTouch = true
-		hitbox.Parent = model
-		model.PrimaryPart = hitbox
-
-		local visual = makeVisual(definition, options.templates)
-		makeInert(visual)
-		visual:PivotTo(CFrame.new(record.Position))
-		visual.Parent = model
-
-		janitor:Add(hitbox.Touched:Connect(function(hit)
-			local character = hit:FindFirstAncestorOfClass("Model")
-			local player = character and Players:GetPlayerFromCharacter(character)
-			if player then
-				options.onTouched(record.PickupId, player)
-			end
-		end), "Disconnect")
-		janitor:Add(model, "Destroy")
-
-		record.Model = model
-		model.Parent = options.folder
-
-		return function()
-			record.Model = nil
-			janitor:Destroy()
-		end
+-- Authored pickup templates: ReplicatedStorage.Assets.Eggs.PickUps.<ModelName>, a Model or a BasePart.
+-- Looked up live on every call, so a template removed at runtime is noticed on the next spawn attempt.
+-- Returns { Has: (modelName) -> boolean }
+function RobloxPickupWorld.newTemplateLookup(replicatedStorage)
+	local function folder()
+		local assets = replicatedStorage:FindFirstChild("Assets")
+		local eggs = assets and assets:FindFirstChild("Eggs")
+		return eggs and eggs:FindFirstChild("PickUps")
 	end
 
-	return factory
+	local lookup = {}
+	function lookup.Has(modelName)
+		local pickUps = folder()
+		local template = pickUps and pickUps:FindFirstChild(modelName)
+		return template ~= nil and (template:IsA("Model") or template:IsA("BasePart"))
+	end
+	return lookup
 end
 
 return RobloxPickupWorld

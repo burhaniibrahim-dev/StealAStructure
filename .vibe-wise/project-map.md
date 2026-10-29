@@ -44,3 +44,9 @@ Rojo `default.project.json` (ServerPackages mapped under ServerScriptService). T
 - What it tracks: server-wide (not per-player) collection totals by source (Floor / TutorialFloor) and egg type; first ordinary and first scripted collection per player, stored as profile flags Milestones.FirstOrdinaryCollection / FirstScriptedCollection (fields kept in DataTemplate, no migration); a Milestone signal.
 - Integration removed from: EggService:TryCollect (the RecordCollection call after a committed collection), its `analytics` dependency, Runner construction, and Services.Analytics.
 - Not a quest/progression system. Future quests would likely need per-player counters and further design; nothing about that is decided.
+
+## Post-launch polish: rolling egg timer (deferred, 2026-10-29)
+- Status: built but not wired for launch, by learner's choice ("polish, keep it here"). Eggs keep their authored Studio TextAttachment UI.
+- Modules: src/ReplicatedStorage/Assets/UI/EggTimer.luau (React countdown: per-digit slide-down, 0.15 s, only changed digits move, leftover digit slides out and re-centres, fixed "s", stops at 0) and EggBillboard.luau (copies the authored TextAttachment UI into React, Timer -> EggTimer).
+- To enable: require EggBillboard in Client.client.luau and uncomment the `decorate` hook passed to SpawningVisuals.new. SpawningVisuals' `decorate` dependency stays in place (optional, unused at launch).
+- Not verified in Studio; reviewed by reading only.

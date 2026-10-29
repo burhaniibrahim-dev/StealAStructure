@@ -164,7 +164,11 @@ Queue.Reliable[0] = table.create(256)
 Queue.Reliable[1] = table.create(256)
 Queue.Reliable[2] = table.create(256)
 Queue.Reliable[3] = table.create(256)
+Queue.Reliable[4] = table.create(256)
+Queue.Reliable[7] = table.create(256)
 export type ItemCounts = {[string]: number}
+export type EggRecord = { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }
+export type EggRemovedReason = ("Collected" | "Expired" | "ZoneRemoved" | "Removed")
 function SerdesFunctions.ReadEVENT_InventorySnapshot(): ({ Revision: number, MaxStack: number, Counts: {[string]: number} })
 	-- Read BLOCK: 8 bytes
 	local BLOCK_START = Read(8)
@@ -199,9 +203,68 @@ function SerdesFunctions.ReadEVENT_InventoryChanged(): ({ Revision: number, Item
 	return Value
 end
 
-function SerdesFunctions.ReadEVENT_PickupCollected(): ({ PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 })
-	-- Read BLOCK: 19 bytes
-	local BLOCK_START = Read(19)
+function SerdesFunctions.ReadEVENT_EggSnapshot(): ({ TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } })
+	-- Read BLOCK: 6 bytes
+	local BLOCK_START = Read(6)
+	local Value = {} :: any
+	Value.TriggerRadius = buffer.readf32(RecieveBuffer, BLOCK_START + 0)
+	-- START ARRAY
+	local Length = buffer.readu16(RecieveBuffer, BLOCK_START + 4)
+	if Length < 0 then error(`Expected "Length" to be larger than or equal to 0, got {Length} instead.`) end
+	if Length > 65535 then error(`Expected "Length" to be smaller than or equal to 65535, got {Length} instead.`) end
+	Value.Eggs = table.create(Length)
+		-- Read BLOCK: 24 bytes
+	local ARRAY_START_1 = Read(24 * Length)
+	for Index = 1, Length do
+		local Item_1 = {} :: any
+		-- Read 4
+		local OPERATION_OFFSET_0 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		Item_1.PickupId = buffer.readu32(RecieveBuffer, OPERATION_OFFSET_0)
+		-- Read 1
+		local OPERATION_OFFSET_1 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		Length = buffer.readu8(RecieveBuffer, OPERATION_OFFSET_1)
+		Item_1.ItemTypeId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		if #Item_1.ItemTypeId < 1 then error(`Expected length of "Item_1.ItemTypeId" to be larger than or equal to 1, got {#Item_1.ItemTypeId} instead.`) end
+		if #Item_1.ItemTypeId > 32 then error(`Expected length of "Item_1.ItemTypeId" to be smaller than or equal to  32, got {#Item_1.ItemTypeId} instead.`) end
+		-- Read 2
+		local OPERATION_OFFSET_2 = ARRAY_START_1
+		ARRAY_START_1 += 2
+		Item_1.Amount = buffer.readu16(RecieveBuffer, OPERATION_OFFSET_2)
+		-- Read 1
+		local OPERATION_OFFSET_3 = ARRAY_START_1
+		ARRAY_START_1 += 1
+		Length = buffer.readu8(RecieveBuffer, OPERATION_OFFSET_3)
+		Item_1.ZoneId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+		if #Item_1.ZoneId < 1 then error(`Expected length of "Item_1.ZoneId" to be larger than or equal to 1, got {#Item_1.ZoneId} instead.`) end
+		if #Item_1.ZoneId > 32 then error(`Expected length of "Item_1.ZoneId" to be smaller than or equal to  32, got {#Item_1.ZoneId} instead.`) end
+		-- Read 4
+		local OPERATION_OFFSET_4 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		local X = buffer.readf32(RecieveBuffer, OPERATION_OFFSET_4)
+		-- Read 4
+		local OPERATION_OFFSET_5 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		local Y = buffer.readf32(RecieveBuffer, OPERATION_OFFSET_5)
+		-- Read 4
+		local OPERATION_OFFSET_6 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		local Z = buffer.readf32(RecieveBuffer, OPERATION_OFFSET_6)
+		Item_1.Position = Vector3.new(X, Y, Z)
+		-- Read 4
+		local OPERATION_OFFSET_7 = ARRAY_START_1
+		ARRAY_START_1 += 4
+		Item_1.RemainingLifetime = buffer.readf32(RecieveBuffer, OPERATION_OFFSET_7)
+		table.insert(Value.Eggs, Item_1)
+	end
+	-- END ARRAY
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_EggSpawned(): ({ PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number })
+	-- Read BLOCK: 24 bytes
+	local BLOCK_START = Read(24)
 	local Value = {} :: any
 	Value.PickupId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
 	local Length = buffer.readu8(RecieveBuffer, BLOCK_START + 4)
@@ -209,11 +272,51 @@ function SerdesFunctions.ReadEVENT_PickupCollected(): ({ PickupId: number, ItemT
 	if #Value.ItemTypeId < 1 then error(`Expected length of "Value.ItemTypeId" to be larger than or equal to 1, got {#Value.ItemTypeId} instead.`) end
 	if #Value.ItemTypeId > 32 then error(`Expected length of "Value.ItemTypeId" to be smaller than or equal to  32, got {#Value.ItemTypeId} instead.`) end
 	Value.Amount = buffer.readu16(RecieveBuffer, BLOCK_START + 5)
-	local X = buffer.readf32(RecieveBuffer, BLOCK_START + 7)
-	local Y = buffer.readf32(RecieveBuffer, BLOCK_START + 11)
-	local Z = buffer.readf32(RecieveBuffer, BLOCK_START + 15)
+	Length = buffer.readu8(RecieveBuffer, BLOCK_START + 7)
+	Value.ZoneId = buffer.readstring(RecieveBuffer, Read(Length), Length)
+	if #Value.ZoneId < 1 then error(`Expected length of "Value.ZoneId" to be larger than or equal to 1, got {#Value.ZoneId} instead.`) end
+	if #Value.ZoneId > 32 then error(`Expected length of "Value.ZoneId" to be smaller than or equal to  32, got {#Value.ZoneId} instead.`) end
+	local X = buffer.readf32(RecieveBuffer, BLOCK_START + 8)
+	local Y = buffer.readf32(RecieveBuffer, BLOCK_START + 12)
+	local Z = buffer.readf32(RecieveBuffer, BLOCK_START + 16)
 	Value.Position = Vector3.new(X, Y, Z)
+	Value.RemainingLifetime = buffer.readf32(RecieveBuffer, BLOCK_START + 20)
 	return Value
+end
+
+function SerdesFunctions.ReadEVENT_EggRemoved(): ({ PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") })
+	-- Read BLOCK: 5 bytes
+	local BLOCK_START = Read(5)
+	local Value = {} :: any
+	Value.PickupId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	Value.Reason = true :: any
+	local Index = buffer.readu8(RecieveBuffer, BLOCK_START + 4)
+	if Index == 0 then
+		Value.Reason = "Collected"
+	elseif Index == 1 then
+		Value.Reason = "Expired"
+	elseif Index == 2 then
+		Value.Reason = "ZoneRemoved"
+	elseif Index == 3 then
+		Value.Reason = "Removed"
+	else
+		error(`Unexpected enum: {Index}`)
+	end
+	return Value
+end
+
+function SerdesFunctions.WriteEVENT_RequestEggSnapshot(Value: number): ()
+	-- Allocate BLOCK: 2 bytes
+	local BLOCK_START = Allocate(2)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 1, Value)
+end
+
+function SerdesFunctions.WriteEVENT_CollectEgg(Value: { PickupId: number }): ()
+	-- Allocate BLOCK: 5 bytes
+	local BLOCK_START = Allocate(5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 6)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.PickupId)
 end
 
 function SerdesFunctions.ReadEVENT_InventoryFull(): ({ ItemTypeId: string })
@@ -236,8 +339,20 @@ if not RunService:IsRunning() then
 	InventoryChanged = {
 		On = NOOP
 	},
-	PickupCollected = {
+	EggSnapshot = {
 		On = NOOP
+	},
+	EggSpawned = {
+		On = NOOP
+	},
+	EggRemoved = {
+		On = NOOP
+	},
+	RequestEggSnapshot = {
+		Fire = NOOP
+	},
+	CollectEgg = {
+		Fire = NOOP
 	},
 	InventoryFull = {
 		On = NOOP
@@ -307,26 +422,48 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 				table.insert(Queue.Reliable[1], {Value} :: {any})
 			end
 		elseif Index == 2 then
-			local Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 } = SerdesFunctions.ReadEVENT_PickupCollected()
+			local Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } } = SerdesFunctions.ReadEVENT_EggSnapshot()
 			if Events.Reliable[2] ~= nil then
-				SerdesEvent = "PickupCollected"
+				SerdesEvent = "EggSnapshot"
 				Events.Reliable[2](Value)
 			else
 				if #Queue.Reliable[2] > 256 then
-					warn("[Blink]: Event queue of \"PickupCollected\" exceeded 256, did you forget to implement a listener?")
+					warn("[Blink]: Event queue of \"EggSnapshot\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[2], {Value} :: {any})
 			end
 		elseif Index == 3 then
-			local Value: { ItemTypeId: string } = SerdesFunctions.ReadEVENT_InventoryFull()
+			local Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } = SerdesFunctions.ReadEVENT_EggSpawned()
 			if Events.Reliable[3] ~= nil then
-				SerdesEvent = "InventoryFull"
+				SerdesEvent = "EggSpawned"
 				Events.Reliable[3](Value)
 			else
 				if #Queue.Reliable[3] > 256 then
-					warn("[Blink]: Event queue of \"InventoryFull\" exceeded 256, did you forget to implement a listener?")
+					warn("[Blink]: Event queue of \"EggSpawned\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[3], {Value} :: {any})
+			end
+		elseif Index == 4 then
+			local Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") } = SerdesFunctions.ReadEVENT_EggRemoved()
+			if Events.Reliable[4] ~= nil then
+				SerdesEvent = "EggRemoved"
+				Events.Reliable[4](Value)
+			else
+				if #Queue.Reliable[4] > 256 then
+					warn("[Blink]: Event queue of \"EggRemoved\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[4], {Value} :: {any})
+			end
+		elseif Index == 7 then
+			local Value: { ItemTypeId: string } = SerdesFunctions.ReadEVENT_InventoryFull()
+			if Events.Reliable[7] ~= nil then
+				SerdesEvent = "InventoryFull"
+				Events.Reliable[7](Value)
+			else
+				if #Queue.Reliable[7] > 256 then
+					warn("[Blink]: Event queue of \"InventoryFull\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[7], {Value} :: {any})
 			end
 		end
 	end
@@ -381,8 +518,8 @@ local Returns = table.freeze({
 			end
 		end
 	},
-	PickupCollected = {
-		On = function(Listener: (Value: { PickupId: number, ItemTypeId: string, Amount: number, Position: Vector3 }) -> ()): () -> ()
+	EggSnapshot = {
+		On = function(Listener: (Value: { TriggerRadius: number, Eggs: { { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number } } }) -> ()): () -> ()
 			Events.Reliable[2] = Listener
 			for Index, Arguments in Queue.Reliable[2] do
 				Listener(table.unpack(Arguments))
@@ -395,8 +532,8 @@ local Returns = table.freeze({
 			end
 		end
 	},
-	InventoryFull = {
-		On = function(Listener: (Value: { ItemTypeId: string }) -> ()): () -> ()
+	EggSpawned = {
+		On = function(Listener: (Value: { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }) -> ()): () -> ()
 			Events.Reliable[3] = Listener
 			for Index, Arguments in Queue.Reliable[3] do
 				Listener(table.unpack(Arguments))
@@ -405,6 +542,44 @@ local Returns = table.freeze({
 			return function (): ()
 				if Events.Reliable[3] == Listener then
 					Events.Reliable[3] = nil
+				end
+			end
+		end
+	},
+	EggRemoved = {
+		On = function(Listener: (Value: { PickupId: number, Reason: ("Collected" | "Expired" | "ZoneRemoved" | "Removed") }) -> ()): () -> ()
+			Events.Reliable[4] = Listener
+			for Index, Arguments in Queue.Reliable[4] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[4] = {}
+			return function (): ()
+				if Events.Reliable[4] == Listener then
+					Events.Reliable[4] = nil
+				end
+			end
+		end
+	},
+	RequestEggSnapshot = {
+		Fire = function(Value: number): ()
+			SerdesFunctions.WriteEVENT_RequestEggSnapshot(Value)
+		end
+	},
+	CollectEgg = {
+		Fire = function(Value: { PickupId: number }): ()
+			SerdesFunctions.WriteEVENT_CollectEgg(Value)
+		end
+	},
+	InventoryFull = {
+		On = function(Listener: (Value: { ItemTypeId: string }) -> ()): () -> ()
+			Events.Reliable[7] = Listener
+			for Index, Arguments in Queue.Reliable[7] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[7] = {}
+			return function (): ()
+				if Events.Reliable[7] == Listener then
+					Events.Reliable[7] = nil
 				end
 			end
 		end

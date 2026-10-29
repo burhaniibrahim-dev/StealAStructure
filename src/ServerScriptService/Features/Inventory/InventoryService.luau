@@ -1,4 +1,4 @@
--- Responsibility: The one authoritative egg inventory. Each egg type is its own stack capped at MAX_STACK.
+-- Responsibility: The one authoritative egg inventory. Each egg type is its own stack capped at InventoryConfig.MAX_STACK.
 -- Pickups add through here and throwing will consume through here; no other module keeps balances.
 -- Every mutation requires an active profile (PlayerDataService) and never yields.
 --
@@ -20,12 +20,12 @@ local function isValidAmount(amount)
 	return type(amount) == "number" and amount == amount and amount >= 1 and math.floor(amount) == amount
 end
 
--- deps: data (PlayerDataService contract), itemDefinitions (shared ItemDefinitions), Signal
+-- deps: data (PlayerDataService contract), itemCatalog (Shared ItemDefintions), maxStack (InventoryConfig.MAX_STACK), Signal
 function InventoryService.new(deps)
 	return setmetatable({
 		_data = deps.data,
-		_items = deps.itemDefinitions.Items,
-		MaxStack = deps.itemDefinitions.MAX_STACK,
+		_items = deps.itemCatalog,
+		MaxStack = deps.maxStack,
 		_revisions = {}, -- [Player] = number
 
 		Changed = deps.Signal.new(), -- (player, itemTypeId, count, revision)

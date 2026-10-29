@@ -8,17 +8,17 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local ProfileStore = require(ServerScriptService.ServerPackages.ProfileStore)
 local DataTemplate = require(ServerScriptService.Features.Data.DataTemplate)
 local PlayerDataService = require(ServerScriptService.Features.Data.PlayerDataService)
-local RobloxPlayers = require(ServerScriptService.Util.RobloxPlayers)
-local Signal = require(ServerScriptService.Util.Signal)
+local RobloxPlayers = require(ServerScriptService.Features.Util.RobloxPlayers)
+local Signal = require(ServerScriptService.Features.Util.Signal)
 
 local PROFILE_STORE_NAME = "PlayerData_v1"
 
 local _Players = {}
 
--- deps: config (PickupConfig; seeds the data template)
+-- deps: defaultOrdinaryCollectionEnabled (seeds the data template)
 -- Returns the PlayerDataService
 function _Players.Init(deps)
-	local profileStore = ProfileStore.New(PROFILE_STORE_NAME, DataTemplate(deps.config))
+	local profileStore = ProfileStore.New(PROFILE_STORE_NAME, DataTemplate(deps.defaultOrdinaryCollectionEnabled))
 
 	return PlayerDataService.new({
 		Signal = Signal,

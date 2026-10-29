@@ -233,32 +233,29 @@ function TestKit.FakeWorld()
 	return world
 end
 
-function TestKit.FakeModels()
-	local models = { created = 0, destroyed = 0, live = {} }
-	function models.Create(record)
-		models.created += 1
-		models.live[record.PickupId] = true
-		return function()
-			models.destroyed += 1
-			models.live[record.PickupId] = nil
-		end
+-- Template lookup for egg models. Every model exists unless named in `missing`
+function TestKit.FakeTemplates()
+	local templates = { missing = {}, lookups = 0 }
+	function templates.Has(modelName)
+		templates.lookups += 1
+		return not templates.missing[modelName]
 	end
-	return models
+	return templates
 end
 
 -- Full system ------------------------------------------------------------------
 
-local Signal = require("../src/ServerScriptService/Util/Signal")
+local Signal = require("../src/ServerScriptService/Features/Util/Signal")
 local ZoneDetection = require("../src/ServerScriptService/Features/Zones/ZoneDetection")
 local ZoneService = require("../src/ServerScriptService/Features/Zones/ZoneService")
 local ZoneSpawner = require("../src/ServerScriptService/Features/Zones/ZoneSpawner")
 local SpawnTrackRegistry = require("../src/ServerScriptService/Features/Zones/SpawnTrackRegistry")
 local EggRegistry = require("../src/ServerScriptService/Features/Items/Eggs/EggRegistry")
 local EggService = require("../src/ServerScriptService/Features/Items/Eggs/EggService")
-local PickupPlacement = require("../src/ServerScriptService/Features/Items/Eggs/PickupPlacement")
-local PickupAnalytics = require("../src/ServerScriptService/Features/Items/Eggs/PickupAnalytics")
-local ExclusionProviders = require("../src/ServerScriptService/Features/Items/Eggs/ExclusionProviders")
+local PickupPlacement = require("../src/ServerScriptService/Features/Items/PickupPlacement")
+local ExclusionProviders = require("../src/ServerScriptService/Features/Items/ExclusionProviders")
 local InventoryService = require("../src/ServerScriptService/Features/Inventory/InventoryService")
+local ConfigValidator = require("../src/ServerScriptService/Features/Util/ConfigValidator")
 
 TestKit.Signal = Signal
 TestKit.ZoneDetection = ZoneDetection
@@ -267,39 +264,29 @@ TestKit.ZoneSpawner = ZoneSpawner
 TestKit.SpawnTrackRegistry = SpawnTrackRegistry
 TestKit.EggRegistry = EggRegistry
 TestKit.EggService = EggService
--- Deferred for MVP: not part of System(). Only the direct analytics-module tests construct it
-TestKit.PickupAnalytics = PickupAnalytics
 TestKit.ExclusionProviders = ExclusionProviders
 TestKit.InventoryService = InventoryService
+TestKit.ConfigValidator = ConfigValidator
 
-function TestKit.ItemDefinitions()
+function TestKit.ItemCatalog()
 	return {
-		MAX_STACK = 100,
-		Items = {
-			SnowEgg = { DisplayName = "Snow Egg", Order = 1 },
-			IceEgg = { DisplayName = "Ice Egg", Order = 2 },
-		},
+		SnowEgg = { DisplayName = "Snow Egg", ModelName = "SnowEgg", Order = 1, VisualFallback = true },
+		IceEgg = { DisplayName = "Ice Egg", ModelName = "IceEgg", Order = 2 },
 	}
 end
 
-function TestKit.Config()
+-- One fixture per config file, shaped exactly like the shipped files
+function TestKit.Configs()
 	return {
-		PickupLifetime = 30,
-		ServerMaxPickups = 50,
-		PickupRadius = 3,
-		SweepRadius = 5,
-		CollectRadius = 8,
-		ProximitySweepInterval = 0.25,
-		InventoryFullCooldown = 2,
-		Schedule = {
-			TickInterval = 0.25,
-			SpawnInterval = { Min = 1, Max = 5 },
-			RatePerExtraPlayer = 0.5,
-			MaxRateMultiplier = 3,
-			PopulationCap = 4,
+		inventoryConfig = { MAX_STACK = 100 },
+		pickupConfig = {
+			PickupLifetime = 30,
+			PickupRadius = 3,
+			CollectRadius = 8,
+			CollectRequestsPerTick = 20,
+			InventoryFullCooldown = 2,
 		},
-		Placement = {
-			MaxAttempts = 5,
+		placementConfig = {
 			RaycastHeight = 40,
 			RaycastDepth = 200,
 			AnchorRaycastHeight = 3,
@@ -312,37 +299,41 @@ function TestKit.Config()
 			ExclusionPadding = 3,
 			TrapPadding = 4,
 		},
-		Zones = {
-			Default = {
-				BasePickups = 3,
-				PickupsPerExtraPlayer = 2,
-				MaxPickups = 8,
-				Distribution = {
+		spawnerConfig = {
+			TickInterval = 0.25,
+			SpawnInterval = { Min = 1, Max = 5 },
+			SpawnIntervalCurve = 0.9,
+			FirstSpawnDelay = 0.5,
+			ReentryCreditMultiplier = 5,
+			PlacementAttempts = 5,
+			BasePickups = 3,
+			MaxPickups = 4,
+			MaxPickupsPerPlayer = 6,
+		},
+		zoneIdConfig = {
+			FallbackZoneProfile = "Default",
+			Zones = {
+				Default = {
 					{ ItemTypeId = "SnowEgg", Weight = 3, Amount = { Min = 1, Max = 1 } },
 					{ ItemTypeId = "IceEgg", Weight = 1, Amount = { Min = 1, Max = 1 } },
 				},
 			},
 		},
-		FallbackZoneProfile = "Default",
-		Tutorial = {
-			DefaultOrdinaryCollectionEnabled = true,
-			ReservedLifetime = 120,
-			MaxReservedPerPlayer = 3,
-			MaxReservedAmount = 25,
-		},
+		tutorialConfig = { DefaultOrdinaryCollectionEnabled = true },
+		debugConfig = { DebugSpawnLog = false, DebugLogInterval = 5 },
 	}
 end
 
--- Builds the real services around fakes. options: config?, traps?, exclusions?, canAccess?
+-- Builds the real services around fakes. options: configs?, traps?, exclusions?, canAccess?, seed?
 function TestKit.System(options)
 	options = options or {}
 	local sys = {}
-	sys.config = options.config or TestKit.Config()
-	sys.itemDefinitions = TestKit.ItemDefinitions()
+	sys.configs = options.configs or TestKit.Configs()
+	sys.itemCatalog = TestKit.ItemCatalog()
 	sys.time = TestKit.FakeTime()
 	sys.rng = TestKit.FakeRandom(options.seed)
 	sys.world = TestKit.FakeWorld()
-	sys.models = TestKit.FakeModels()
+	sys.templates = TestKit.FakeTemplates()
 	sys.data = TestKit.FakeData()
 	sys.players = {}
 	sys.roots = {} -- [player] = Vector3?
@@ -374,9 +365,14 @@ function TestKit.System(options)
 		warn = warnSink,
 	})
 	sys.eggRegistry = EggRegistry.new()
-	sys.inventory = InventoryService.new({ data = sys.data, itemDefinitions = sys.itemDefinitions, Signal = Signal })
+	sys.inventory = InventoryService.new({
+		data = sys.data,
+		itemCatalog = sys.itemCatalog,
+		maxStack = sys.configs.inventoryConfig.MAX_STACK,
+		Signal = Signal,
+	})
 	sys.placement = PickupPlacement.new({
-		config = sys.config.Placement,
+		config = sys.configs.placementConfig,
 		detection = ZoneDetection,
 		world = sys.world,
 		registry = sys.eggRegistry,
@@ -384,7 +380,7 @@ function TestKit.System(options)
 			return sys.zones:GetAnchors(zoneId)
 		end,
 		exclusions = options.exclusions or {},
-		traps = options.traps or ExclusionProviders.NoTrapsProvider(),
+		traps = options.traps,
 	})
 	sys.tracks = SpawnTrackRegistry.new({
 		spawn = function(fn, ...)
@@ -399,20 +395,19 @@ function TestKit.System(options)
 		warn = warnSink,
 	})
 	sys.eggs = EggService.new({
-		config = sys.config,
-		itemDefinitions = sys.itemDefinitions,
+		pickupConfig = sys.configs.pickupConfig,
+		spawnerConfig = sys.configs.spawnerConfig,
+		itemCatalog = sys.itemCatalog,
+		maxStack = sys.configs.inventoryConfig.MAX_STACK,
 		registry = sys.eggRegistry,
 		placement = sys.placement,
-		detection = ZoneDetection,
 		zones = sys.zones,
 		inventory = sys.inventory,
 		data = sys.data,
 		tracks = sys.tracks,
-		models = sys.models,
 		scheduler = sys.time.scheduler,
 		now = sys.time.now,
 		rng = sys.rng,
-		getPlayers = getPlayers,
 		isPlayerPresent = function(player)
 			return player.Present
 		end,
@@ -421,15 +416,28 @@ function TestKit.System(options)
 		warn = warnSink,
 	})
 	sys.spawner = ZoneSpawner.new({
-		config = sys.config,
+		spawnerConfig = sys.configs.spawnerConfig,
+		zoneConfig = sys.configs.zoneIdConfig,
+		itemCatalog = sys.itemCatalog,
+		fallbackItemTypeId = "SnowEgg",
+		templates = sys.templates,
 		zones = sys.zones,
 		eggs = sys.eggs,
 		eggRegistry = sys.eggRegistry,
+		getPlayers = getPlayers,
+		getRootPosition = getRootPosition,
 		rng = sys.rng,
+		warn = warnSink,
 	})
 	sys.zones.ZoneRemoved:Connect(function(zoneId)
 		sys.eggs:RemoveZonePickups(zoneId)
 		sys.spawner:RemoveZone(zoneId)
+	end)
+
+	-- Every Removed signal, in order: { Record, Reason }
+	sys.removals = {}
+	sys.eggs.Removed:Connect(function(record, reason)
+		table.insert(sys.removals, { Record = record, Reason = reason })
 	end)
 
 	-- Helpers
@@ -445,6 +453,7 @@ function TestKit.System(options)
 	function sys.removePlayer(player)
 		player.Present = false
 		sys.eggs:OnPlayerRemoving(player)
+		sys.spawner:RemovePlayer(player)
 		sys.zones:RemovePlayer(player)
 		sys.data:Unload(player)
 	end
@@ -456,13 +465,27 @@ function TestKit.System(options)
 		local part = TestKit.FakeZonePart(attributes, options2)
 		return part, sys.zones:Register(part)
 	end
-	-- Spawn an ordinary pickup at an exact position by queuing the sampler's random values
-	function sys.spawnAt(zoneId, x, z, itemTypeId, amount)
+	-- Queue the sampler's random values so the next random candidate lands at (x, z) in `zoneId`
+	function sys.pushPosition(zoneId, x, z)
 		local zone = sys.zones:GetZone(zoneId)
 		local size = zone.Size
 		local center = zone.CFrame.Position
 		sys.rng:Push((x - center.X) / size.X + 0.5, (z - center.Z) / size.Z + 0.5)
-		return sys.eggs:TrySpawnOrdinary(zoneId, itemTypeId or "SnowEgg", amount or 1, 1000)
+	end
+	-- Spawn an egg owned by `owner` at an exact position
+	function sys.spawnAt(owner, zoneId, x, z, itemTypeId, amount)
+		sys.pushPosition(zoneId, x, z)
+		return sys.eggs:TrySpawn(owner, zoneId, itemTypeId or "SnowEgg", amount or 1)
+	end
+	-- Polls zones and steps the spawner on the shared tick from the current time until `seconds` later
+	function sys.run(seconds)
+		local tick = sys.configs.spawnerConfig.TickInterval
+		local target = sys.time.t + seconds
+		while sys.time.t <= target + 1e-9 do
+			sys.zones:Poll()
+			sys.spawner:Step(sys.time.t)
+			sys.time.advance(tick)
+		end
 	end
 	function sys.setCount(player, itemTypeId, count)
 		sys.data:GetData(player).Inventory[itemTypeId] = count

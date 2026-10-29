@@ -6,6 +6,12 @@
 -- longer calls RecordCollection. It is kept as a reference; see the post-MVP note in .vibe-wise/project-map.md.
 
 local PickupAnalytics = {}
+
+return PickupAnalytics
+
+
+--[[
+
 PickupAnalytics.__index = PickupAnalytics
 
 PickupAnalytics.Source = {
@@ -67,4 +73,6 @@ function PickupAnalytics:ResetTotals()
 	table.clear(self._totals)
 end
 
-return PickupAnalytics
+
+
+]]

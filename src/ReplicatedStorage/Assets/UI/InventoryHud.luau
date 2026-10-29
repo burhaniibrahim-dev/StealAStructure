@@ -7,7 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Packages.React)
-local UiAssets = require(ReplicatedStorage.Shared.Configs.UiAssets)
+local UiAssets = require(ReplicatedStorage.Shared.Configs.UI.UiAssets)
 local EggIcon = require(script.Parent.EggIcon)
 local Theme = require(script.Parent.Theme)
 
@@ -20,7 +20,7 @@ local SHADOW_OFFSET = 5
 
 local function sortedItems(itemDefinitions)
 	local list = {}
-	for itemTypeId, definition in itemDefinitions.Items do
+	for itemTypeId, definition in itemDefinitions do
 		table.insert(list, { Id = itemTypeId, Definition = definition })
 	end
 	table.sort(list, function(a, b)
@@ -305,7 +305,7 @@ local function InventoryHud(props)
 		})
 	end
 
-	local toastDefinition = toast and props.itemDefinitions.Items[toast.ItemTypeId]
+	local toastDefinition = toast and props.itemDefinitions[toast.ItemTypeId]
 
 	return e("ScreenGui", { Name = "InventoryHud", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, {
 		Stacks = e("Frame", {

@@ -1,10 +1,13 @@
--- Responsibility: Floor egg pickup lifecycle. Spawn requests, placement, model creation, collection, expiry, removal.
+-- Responsibility: Floor egg record lifecycle and collection authority. Spawn requests, placement, collection,
+-- expiry, removal. Records are data only: each owner's client clones and destroys its own models, so the server
+-- never creates egg instances. Runner forwards Spawned/Removed to the owning player only.
 -- Collected eggs go into the shared InventoryService, which owns balances; this service only manages the floor.
--- The server decides everything: clients never send positions, amounts, rarities, or pickup ids for grants.
+--
+-- The server decides everything. A client collection request carries only a PickupId; the owner is the player the
+-- request arrived from, and position, type, amount, and ownership always come from the record.
 --
 -- Collection is atomic: from the final availability check through the inventory add and the registry state
--- change nothing yields, so repeated touches, several body parts, and simultaneous players can't duplicate
--- a pickup. The first valid server-processed collection wins; every later attempt finds no record.
+-- change nothing yields, so duplicate requests can't duplicate an award. Every later attempt finds no record.
 --
 -- Note: server-measured root distance is a sanity check, not teleport protection. TryCollect takes the
 -- position from deps.getRootPosition so a future movement-validation layer can supply a vetted position.
@@ -14,47 +17,50 @@ EggService.__index = EggService
 
 EggService.Reason = {
 	NotFound = "NotFound",
+	NotOwner = "NotOwner",
 	Expired = "Expired",
 	PlayerNotPresent = "PlayerNotPresent",
 	ProfileNotActive = "ProfileNotActive",
 	NoCharacter = "NoCharacter",
 	TooFar = "TooFar",
 	ZoneAccess = "ZoneAccess",
-	ReservedForOther = "ReservedForOther",
 	TutorialLocked = "TutorialLocked",
 	InventoryFull = "InventoryFull",
+	RateLimited = "RateLimited",
 	InvalidZone = "InvalidZone",
 	InvalidItem = "InvalidItem",
 	InvalidAmount = "InvalidAmount",
-	InvalidDefinition = "InvalidDefinition",
-	ZoneBudget = "ZoneBudget",
-	ServerBudget = "ServerBudget",
-	ReservedLimit = "ReservedLimit",
+	PlayerCap = "PlayerCap",
+	ZoneCap = "ZoneCap",
 	PlacementRejected = "PlacementRejected",
-	ModelFailed = "ModelFailed",
+	-- Removal reasons (Removed signal)
+	Collected = "Collected",
+	ZoneRemoved = "ZoneRemoved",
+	Removed = "Removed",
+	OwnerLeft = "OwnerLeft",
+	Shutdown = "Shutdown",
 }
 
 local Reason = EggService.Reason
 
-local function isWholeAmount(amount)
+local function isWholeAmount(amount: number)
 	return type(amount) == "number" and amount == amount and amount >= 1 and math.floor(amount) == amount
 end
 
 -- deps:
---   config            PickupConfig
---   itemDefinitions   shared ItemDefinitions
+--   pickupConfig      Configs/Eggs/PickupConfig
+--   spawnerConfig     Configs/Zones/SpawnerConfig (MaxPickups, MaxPickupsPerPlayer, TickInterval)
+--   itemCatalog       Shared ItemDefintions
+--   maxStack          InventoryConfig.MAX_STACK
 --   registry          EggRegistry
 --   placement         PickupPlacement
---   detection         ZoneDetection
 --   zones             ZoneService
 --   inventory         InventoryService
 --   data              PlayerDataService contract
---   tracks            SpawnTrackRegistry (personal tutorial sessions)
---   models            { Create: (record) -> (cleanup: () -> ())? }
+--   tracks            SpawnTrackRegistry (personal scripted sessions; closed when the player leaves)
 --   scheduler         { Delay: (seconds, fn) -> handle, Cancel: (handle) -> () }
 --   now               () -> number
 --   rng               Random-like (NextNumber, NextInteger)
---   getPlayers        () -> {Player}
 --   isPlayerPresent   (Player) -> boolean
 --   getRootPosition   (Player) -> Vector3?   non-yielding; nil without a living character
 --   Signal
@@ -63,33 +69,26 @@ end
 function EggService.new(deps)
 	return setmetatable({
 		_deps = deps,
-		_config = deps.config,
-		_items = deps.itemDefinitions.Items,
-		_maxStack = deps.itemDefinitions.MAX_STACK,
+		_config = deps.pickupConfig,
+		_spawnerConfig = deps.spawnerConfig,
+		_items = deps.itemCatalog,
+		_maxStack = deps.maxStack,
 		_registry = deps.registry,
 		_warn = deps.warn or warn,
 		_fullNotifiedAt = {}, -- [Player] = { [ItemTypeId] = time }
+		_requestWindows = {}, -- [Player] = { Start = time, Count = number }
 		_destroyed = false,
 
 		Spawned = deps.Signal.new(), -- (record)
 		Collected = deps.Signal.new(), -- (player, record, newCount)
-		Despawned = deps.Signal.new(), -- (record, reason)
+		Removed = deps.Signal.new(), -- (record, reason); every exit: collection, expiry, zone/owner removal
 		InventoryFull = deps.Signal.new(), -- (player, itemTypeId); already rate-limited
 	}, EggService)
 end
 
 -- Internal lifecycle ----------------------------------------------------------
-
 function EggService:_create(fields, lifetime)
 	local record = self._registry:Create(fields)
-
-	local ok, cleanupOrError = pcall(self._deps.models.Create, record)
-	if not ok then
-		self._registry:Finish(record.PickupId, "Despawned")
-		self._warn(`[EggService] Pickup model creation failed: {cleanupOrError}`)
-		return nil, Reason.ModelFailed
-	end
-	record.Cleanup = cleanupOrError
 
 	-- The callback carries the generation it was scheduled for and does nothing if the record moved on
 	local pickupId, generation = record.PickupId, record.Generation
@@ -113,18 +112,7 @@ function EggService:_finish(record, finalState, reason)
 		self._deps.scheduler.Cancel(handle)
 	end
 
-	local cleanup = record.Cleanup
-	record.Cleanup = nil
-	if cleanup then
-		local ok, err = pcall(cleanup)
-		if not ok then
-			self._warn(`[EggService] Pickup cleanup failed: {err}`)
-		end
-	end
-
-	if finalState == "Despawned" then
-		self.Despawned:Fire(record, reason)
-	end
+	self.Removed:Fire(record, reason)
 	return true
 end
 
@@ -137,6 +125,129 @@ function EggService:_onExpiryTimer(pickupId, generation)
 	self:_finish(record, "Despawned", Reason.Expired)
 end
 
+-- Spawning -------------------------------------------------------------------------
+
+-- Hard caps for one owner in one zone. Returns true, or false and the cap that blocks
+function EggService:HasCapacity(userId, zoneId)
+	if self._registry:CountOwner(userId) >= self._spawnerConfig.MaxPickupsPerPlayer then
+		return false, Reason.PlayerCap
+	end
+	if self._registry:CountOwnerZone(userId, zoneId) >= self._spawnerConfig.MaxPickups then
+		return false, Reason.ZoneCap
+	end
+	return true
+end
+
+-- One placement candidate for an ordinary egg owned by `player`. Called by ZoneSpawner, which owns retries.
+function EggService:TrySpawn(player, zoneId, itemTypeId, amount)
+	if self._destroyed then return nil, Reason.InvalidZone end
+
+	local zone = self._deps.zones:GetZone(zoneId)
+	if not zone then return nil, Reason.InvalidZone end
+
+	if self._items[itemTypeId] == nil then return nil, Reason.InvalidItem end
+	if not isWholeAmount(amount) or amount > self._maxStack then return nil, Reason.InvalidAmount end
+
+	local position, placementReason = self._deps.placement:TryCandidate(zone, self._deps.rng, player.UserId)
+	if not position then
+		return nil, Reason.PlacementRejected, placementReason
+	end
+
+	-- Caps are confirmed last, immediately before registering, with no yield in between
+	local hasCapacity, capReason = self:HasCapacity(player.UserId, zoneId)
+	if not hasCapacity then
+		return nil, capReason
+	end
+
+	local now = self._deps.now()
+	local lifetime = self._config.PickupLifetime
+	return self:_create({
+		OwnerUserId = player.UserId,
+		ItemTypeId = itemTypeId,
+		Amount = amount,
+		ZoneId = zoneId,
+		Position = position,
+		CreatedAt = now,
+		ExpiresAt = now + lifetime,
+	}, lifetime)
+end
+
+-- Seconds until the record expires, measured on the server clock only. Sent to the owner so it never
+-- compares server and client clocks; the client still waits for the server's removal
+function EggService:GetRemainingLifetime(record)
+	return math.max(record.ExpiresAt - self._deps.now(), 0)
+end
+
+-- Tutorial gate ------------------------------------------------------------------
+-- Ordinary collection is refused while the saved Tutorial.OrdinaryCollectionEnabled flag is false.
+-- PENDING: who flips the flag (SetCollectionEnabled) waits on the tutorial module boundary.
+function EggService:IsOrdinaryCollectionEnabled(player)
+	local data = self._deps.data:GetData(player)
+	return data ~= nil and data.Tutorial ~= nil and data.Tutorial.OrdinaryCollectionEnabled == true
+end
+
+-- Collection ------------------------------------------------------------------
+
+-- Network entry point. Drops requests over PickupConfig.CollectRequestsPerTick per SpawnerConfig.TickInterval
+-- window before doing any work, then validates like TryCollect
+function EggService:HandleCollectRequest(player, pickupId)
+	local now = self._deps.now()
+	local window = self._requestWindows[player]
+	if not window or now - window.Start >= self._spawnerConfig.TickInterval then
+		window = { Start = now, Count = 0 }
+		self._requestWindows[player] = window
+	end
+	if window.Count >= self._config.CollectRequestsPerTick then
+		return false, Reason.RateLimited
+	end
+	window.Count += 1
+	return self:TryCollect(player, pickupId)
+end
+
+-- Validates and commits one collection attempt. Returns true, newCount or false, reason. Never yields.
+function EggService:TryCollect(player, pickupId)
+	local deps = self._deps
+	local record = self._registry:Get(pickupId)
+
+	if not record or not self._registry.IsCollectible(record) then return false, Reason.NotFound end
+	-- Ownership first: another player's request must never change someone else's egg, not even by expiring it
+	if record.OwnerUserId ~= player.UserId then return false, Reason.NotOwner end
+
+	-- A late or skipped expiry timer must not leave a collectable egg behind
+	if deps.now() >= record.ExpiresAt then
+		self:_finish(record, "Despawned", Reason.Expired)
+		return false, Reason.Expired
+	end
+
+	if not deps.isPlayerPresent(player) then return false, Reason.PlayerNotPresent end
+	if not deps.data:IsActive(player) then return false, Reason.ProfileNotActive end
+	local rootPosition = deps.getRootPosition(player)
+	if not rootPosition then return false, Reason.NoCharacter end
+	if (rootPosition - record.Position).Magnitude > self._config.CollectRadius then return false, Reason.TooFar end
+
+	if not deps.zones:CanAccess(player, record.ZoneId) then
+		return false, Reason.ZoneAccess
+	end
+	if not self:IsOrdinaryCollectionEnabled(player) then
+		return false, Reason.TutorialLocked
+	end
+
+	if not deps.inventory:CanAdd(player, record.ItemTypeId, record.Amount) then
+		-- The egg stays exactly as it was
+		self:_notifyFull(player, record.ItemTypeId)
+		return false, Reason.InventoryFull
+	end
+
+	-- Commit. No yields from here to the end of the function
+	local added, newCount = deps.inventory:TryAdd(player, record.ItemTypeId, record.Amount)
+	if not added then return false, Reason.InventoryFull end
+
+	self:_finish(record, "Collected", Reason.Collected)
+	self.Collected:Fire(player, record, newCount)
+	return true, newCount
+end
+
+-- Client Utils ---------------------------------------------------------------------
 function EggService:_notifyFull(player, itemTypeId)
 	local now = self._deps.now()
 	local byItem = self._fullNotifiedAt[player]
@@ -152,232 +263,20 @@ function EggService:_notifyFull(player, itemTypeId)
 	self.InventoryFull:Fire(player, itemTypeId)
 end
 
--- Spawning -------------------------------------------------------------------------
-
--- One placement candidate for an ordinary pickup. Called by ZoneSpawner, which owns retries.
--- zoneBudget is the population-aware cap ZoneSpawner computed for this zone right now.
-function EggService:TrySpawnOrdinary(zoneId, itemTypeId, amount, zoneBudget)
-	if self._destroyed then
-		return nil, Reason.InvalidZone
-	end
-	local zone = self._deps.zones:GetZone(zoneId)
-	if not zone then
-		return nil, Reason.InvalidZone
-	end
-	if self._items[itemTypeId] == nil then
-		return nil, Reason.InvalidItem
-	end
-	if not isWholeAmount(amount) or amount > self._maxStack then
-		return nil, Reason.InvalidAmount
-	end
-
-	local position, placementReason = self._deps.placement:TryCandidate(zone, self._deps.rng)
-	if not position then
-		return nil, Reason.PlacementRejected, placementReason
-	end
-
-	-- Budgets are confirmed last, immediately before registering, with no yield in between
-	if self._registry:CountZone(zoneId) >= zoneBudget then
-		return nil, Reason.ZoneBudget
-	end
-	if self._registry:CountOrdinary() >= self._config.ServerMaxPickups then
-		return nil, Reason.ServerBudget
-	end
-
-	local now = self._deps.now()
-	return self:_create({
-		ItemTypeId = itemTypeId,
-		Amount = amount,
-		ZoneId = zoneId,
-		Position = position,
-		CreatedAt = now,
-		ExpiresAt = now + self._config.PickupLifetime,
-	}, self._config.PickupLifetime)
-end
-
--- Tutorial API: a pickup only `player` can see as available and collect.
--- definition: { ItemTypeId: string, Amount: number, Position: Vector3, Lifetime: number? }
--- Position is the tutorial's authored spot; it is snapped to the ground below and checked for traps/clearance.
-function EggService:SpawnReservedPickup(player, definition)
-	if self._destroyed then
-		return nil, Reason.PlayerNotPresent
-	end
-	if type(definition) ~= "table" or typeof(definition.Position) ~= "Vector3" then
-		return nil, Reason.InvalidDefinition
-	end
-	if self._items[definition.ItemTypeId] == nil then
-		return nil, Reason.InvalidItem
-	end
-	local tutorialConfig = self._config.Tutorial
-	local amount = definition.Amount
-	if not isWholeAmount(amount) or amount > tutorialConfig.MaxReservedAmount or amount > self._maxStack then
-		return nil, Reason.InvalidAmount
-	end
-	if not self._deps.isPlayerPresent(player) then
-		return nil, Reason.PlayerNotPresent
-	end
-	if not self._deps.data:IsActive(player) then
-		return nil, Reason.ProfileNotActive
-	end
-	if self._registry:CountReserved(player.UserId) >= tutorialConfig.MaxReservedPerPlayer then
-		return nil, Reason.ReservedLimit
-	end
-
-	local placementConfig = self._config.Placement
-	local origin = definition.Position + Vector3.new(0, placementConfig.AnchorRaycastHeight, 0)
-	local position, placementReason =
-		self._deps.placement:Validate(origin, placementConfig.AnchorRaycastHeight + placementConfig.RaycastDepth, nil)
-	if not position then
-		return nil, Reason.PlacementRejected, placementReason
-	end
-
-	local zone = self._deps.detection.Find(position, self._deps.zones:GetZones())
-	local lifetime = definition.Lifetime or tutorialConfig.ReservedLifetime
-	local now = self._deps.now()
-	return self:_create({
-		ItemTypeId = definition.ItemTypeId,
-		Amount = amount,
-		ZoneId = zone and zone.ZoneId,
-		Position = position,
-		CreatedAt = now,
-		ExpiresAt = now + lifetime,
-		ReservedUserId = player.UserId,
-	}, lifetime)
-end
-
--- Tutorial API: server-side gate for ordinary pickups. Saved in the profile
-function EggService:SetCollectionEnabled(player, enabled)
-	local data = self._deps.data:GetData(player)
-	if not data then
-		return false
-	end
-	data.Tutorial = data.Tutorial or {}
-	data.Tutorial.OrdinaryCollectionEnabled = enabled == true
-	return true
-end
-
-function EggService:IsOrdinaryCollectionEnabled(player)
-	local data = self._deps.data:GetData(player)
-	return data ~= nil and data.Tutorial ~= nil and data.Tutorial.OrdinaryCollectionEnabled == true
-end
-
--- Tutorial API
-function EggService:RemoveReservedPickups(player)
-	for _, record in self._registry:GetReservedFor(player.UserId) do
-		self:_finish(record, "Despawned", "ReservationCleared")
-	end
-end
-
--- Tutorial API: personal scripted spawning sequence. run(session) runs on its own thread;
--- check session.Active after yielding. Reopening the same key replaces the old session cleanly
-function EggService:OpenScriptedSession(player, key, run)
-	return self._deps.tracks:Open(player, key, run)
-end
-
-function EggService:CloseScriptedSession(player, key)
-	return self._deps.tracks:Close(player, key)
-end
-
--- Collection ------------------------------------------------------------------
-
--- Validates and commits one collection attempt. Every call is a candidate; most will be rejected.
--- Returns true, newCount or false, reason. Never yields.
-function EggService:TryCollect(player, pickupId)
-	local deps = self._deps
-	local record = self._registry:Get(pickupId)
-	if not record or not self._registry.IsCollectible(record) then
-		return false, Reason.NotFound
-	end
-
-	-- A late or skipped expiry timer must not leave a collectable egg behind
-	if deps.now() >= record.ExpiresAt then
-		self:_finish(record, "Despawned", Reason.Expired)
-		return false, Reason.Expired
-	end
-
-	if not deps.isPlayerPresent(player) then
-		return false, Reason.PlayerNotPresent
-	end
-	if not deps.data:IsActive(player) then
-		return false, Reason.ProfileNotActive
-	end
-	local rootPosition = deps.getRootPosition(player)
-	if not rootPosition then
-		return false, Reason.NoCharacter
-	end
-	if (rootPosition - record.Position).Magnitude > self._config.CollectRadius then
-		return false, Reason.TooFar
-	end
-	if record.ZoneId and not deps.zones:CanAccess(player, record.ZoneId) then
-		return false, Reason.ZoneAccess
-	end
-
-	if record.ReservedUserId then
-		if record.ReservedUserId ~= player.UserId then
-			return false, Reason.ReservedForOther
-		end
-	elseif not self:IsOrdinaryCollectionEnabled(player) then
-		return false, Reason.TutorialLocked
-	end
-
-	if not deps.inventory:CanAdd(player, record.ItemTypeId, record.Amount) then
-		-- The pickup stays exactly as it was
-		self:_notifyFull(player, record.ItemTypeId)
-		return false, Reason.InventoryFull
-	end
-
-	-- Commit. No yields from here to the end of the function
-	local added, newCount = deps.inventory:TryAdd(player, record.ItemTypeId, record.Amount)
-	if not added then
-		return false, Reason.InventoryFull
-	end
-	self:_finish(record, "Collected")
-	self.Collected:Fire(player, record, newCount)
-	return true, newCount
-end
-
--- Touch signal from the pickup's hitbox (already resolved to a player by the Roblox adapter)
-function EggService:HandleTouch(pickupId, player)
-	return self:TryCollect(player, pickupId)
-end
-
--- Catches players standing still on a pickup (e.g. after their full stack frees up), where Touched won't refire
-function EggService:SweepProximity()
-	local sweepRadius = self._config.SweepRadius
-	for _, player in self._deps.getPlayers() do
-		local rootPosition = self._deps.getRootPosition(player)
-		if not rootPosition then
-			continue
-		end
-		local candidates = self._registry:GetReservedFor(player.UserId)
-		local zoneId = self._deps.zones:GetZoneOf(player)
-		if zoneId then
-			for _, record in self._registry:GetInZone(zoneId) do
-				table.insert(candidates, record)
-			end
-		end
-		for _, record in candidates do
-			if (record.Position - rootPosition).Magnitude <= sweepRadius then
-				self:TryCollect(player, record.PickupId)
-			end
-		end
-	end
-end
-
 -- Removal ---------------------------------------------------------------------
 
 function EggService:Despawn(pickupId, reason)
 	local record = self._registry:Get(pickupId)
-	return record ~= nil and self:_finish(record, "Despawned", reason or "Removed")
+	return record ~= nil and self:_finish(record, "Despawned", reason or Reason.Removed)
 end
 
 function EggService:RemoveZonePickups(zoneId)
 	for _, record in self._registry:GetInZone(zoneId) do
-		self:_finish(record, "Despawned", "ZoneRemoved")
+		self:_finish(record, "Despawned", Reason.ZoneRemoved)
 	end
 end
 
--- Expires anything past ExpiresAt. Safety net beside the per-pickup timers
+-- Expires anything past ExpiresAt. Safety net beside the per-egg timers
 function EggService:ExpireDue()
 	local now = self._deps.now()
 	for _, record in self._registry:GetAll() do
@@ -387,10 +286,14 @@ function EggService:ExpireDue()
 	end
 end
 
+-- Removes every record the player owns. Idempotent: Runner calls it on Releasing and again on PlayerRemoving
 function EggService:OnPlayerRemoving(player)
-	self:RemoveReservedPickups(player)
+	for _, record in self._registry:GetOwnedBy(player.UserId) do
+		self:_finish(record, "Despawned", Reason.OwnerLeft)
+	end
 	self._deps.tracks:CloseAll(player)
 	self._fullNotifiedAt[player] = nil
+	self._requestWindows[player] = nil
 end
 
 function EggService:Destroy()
@@ -400,11 +303,11 @@ function EggService:Destroy()
 	self._destroyed = true
 	self._deps.tracks:Destroy()
 	for _, record in self._registry:GetAll() do
-		self:_finish(record, "Despawned", "Shutdown")
+		self:_finish(record, "Despawned", Reason.Shutdown)
 	end
 	self.Spawned:DisconnectAll()
 	self.Collected:DisconnectAll()
-	self.Despawned:DisconnectAll()
+	self.Removed:DisconnectAll()
 	self.InventoryFull:DisconnectAll()
 end
 

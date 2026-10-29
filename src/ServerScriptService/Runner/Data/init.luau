@@ -4,10 +4,10 @@ local _Players = require(script._Players)
 
 local Data = {}
 
--- deps: config (PickupConfig)
+-- deps: defaultOrdinaryCollectionEnabled (TutorialConfig.DefaultOrdinaryCollectionEnabled)
 -- Returns the PlayerDataService
 function Data.Init(deps)
-	return _Players.Init({ config = deps.config })
+	return _Players.Init({ defaultOrdinaryCollectionEnabled = deps.defaultOrdinaryCollectionEnabled })
 end
 
 return Data

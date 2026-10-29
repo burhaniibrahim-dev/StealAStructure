@@ -1,7 +1,7 @@
 -- these can be ignored if you are using the studio plugin
 -- Paths are relative to this file
 option ClientOutput = "src/ReplicatedStorage/Shared/Networker/Client.luau"
-option ServerOutput = "src/ServerScriptService/Networker/Server.luau"
+option ServerOutput = "src/ServerScriptService/Runner/ServerNetwork.luau"
 
 -- Inventory ---------------------------------------------------------------
 -- Inventory messages only ever go to the owning player.
@@ -31,18 +31,65 @@ event InventoryChanged {
 	},
 }
 
--- Pickups -----------------------------------------------------------------
--- Pickup models replicate through Workspace; these are outcome notifications only.
+-- Eggs --------------------------------------------------------------------
+-- Every egg belongs to one player and only ever goes to that player: the server never fires egg state to
+-- anyone else, and each client clones its own models. The client waits for EggRemoved before removing an egg.
+-- Ordering: the server sends nothing live until RequestEggSnapshot arrives, then EggSnapshot, then live
+-- EggSpawned / EggRemoved in order on this reliable channel. A snapshot always replaces the client's set.
 
-event PickupCollected {
+struct EggRecord {
+	PickupId: u32,
+	ItemTypeId: string(1..32),
+	Amount: u16,
+	ZoneId: string(1..32),
+	Position: vector,
+	RemainingLifetime: f32, -- seconds left on the server clock when sent; display only
+}
+
+enum EggRemovedReason = { Collected, Expired, ZoneRemoved, Removed }
+
+event EggSnapshot {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		TriggerRadius: f32, -- PickupConfig.PickupRadius: request collection on entering this range
+		Eggs: EggRecord[],
+	},
+}
+
+event EggSpawned {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: EggRecord,
+}
+
+event EggRemoved {
 	From: Server,
 	Type: Reliable,
 	Call: SingleSync,
 	Data: struct {
 		PickupId: u32,
-		ItemTypeId: string(1..32),
-		Amount: u16,
-		Position: vector,
+		Reason: EggRemovedReason,
+	},
+}
+
+-- Sent once, after the client's egg listeners are registered. The server honours the first request per session
+event RequestEggSnapshot {
+	From: Client,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: u8,
+}
+
+-- Identifies only the egg. The owner is the sending player; everything else comes from the server record
+event CollectEgg {
+	From: Client,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		PickupId: u32,
 	},
 }
 

@@ -8,8 +8,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local _Features = ServerScriptService.Features
 
-local RobloxPlayers = require(ServerScriptService.Util.RobloxPlayers)
-local Signal = require(ServerScriptService.Util.Signal)
+local RobloxPlayers = require(_Features.Util.RobloxPlayers)
+local Signal = require(_Features.Util.Signal)
 local ZoneDetection = require(_Features.Zones.ZoneDetection)
 local ZoneService = require(_Features.Zones.ZoneService)
 local ZoneSpawner = require(_Features.Zones.ZoneSpawner)
@@ -27,14 +27,22 @@ function Zones.Init(deps)
 	})
 end
 
--- deps: config (PickupConfig), zones (ZoneService), eggs (EggService), eggRegistry (EggRegistry), rng (Random)
+-- deps: spawnConfig (SpawnerConfig), zoneConfig (IdConfig), itemCatalog, fallbackItemTypeId,
+--       templates ({ Has }), zones (ZoneService), eggs (EggService), eggRegistry (EggRegistry),
+--       getActivePlayers () -> {Player}, rng (Random)
 -- Returns the ZoneSpawner
 function Zones.StartSpawner(deps)
 	return ZoneSpawner.new({
-		config = deps.config,
+		spawnerConfig = deps.spawnConfig,
+		zoneConfig = deps.zoneConfig,
+		itemCatalog = deps.itemCatalog,
+		fallbackItemTypeId = deps.fallbackItemTypeId,
+		templates = deps.templates,
 		zones = deps.zones,
 		eggs = deps.eggs,
 		eggRegistry = deps.eggRegistry,
+		getPlayers = deps.getActivePlayers,
+		getRootPosition = RobloxPlayers.getRootPosition,
 		rng = deps.rng,
 	})
 end

@@ -15,6 +15,7 @@ PlayerDataService.SESSION_ENDED_MESSAGE = "Your data session ended (you may have
 --   isPresent: (Player) -> boolean
 --   kick: (Player, string) -> ()
 --   warn: ((string) -> ())?
+
 function PlayerDataService.new(deps)
 	return setmetatable({
 		_deps = deps,
