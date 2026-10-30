@@ -168,4 +168,9 @@ function EggRegistry:IterateOwnedBy(userId)
 	return next, self._byOwner[userId] or EMPTY
 end
 
+-- Read-only iteration over every live record (every owner) without copying. Do not finish records inside the loop
+function EggRegistry:IterateAll()
+	return next, self._byId
+end
+
 return EggRegistry

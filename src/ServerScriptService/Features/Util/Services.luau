@@ -8,4 +8,5 @@ return {
 	Inventory = nil,
 	Zones = nil,
 	Eggs = nil,
+	Targets = nil, -- TargetService: ApplyHit(player, targetId, damage) is the seam for real throwing
 }

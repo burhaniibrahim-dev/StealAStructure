@@ -11,11 +11,14 @@
 --   zoneIdConfig      Configs/Zones/IdConfig
 --   tutorialConfig    Configs/TutorialConfig
 --   debugConfig       Configs/DebugConfig
---   hasTemplate       ((modelName: string) -> boolean)?   omitted in tests that don't cover templates
+--   targetConfig      Configs/Targets/TargetConfig
+--   hasTemplate       ((modelName: string) -> boolean)?   egg templates only; omitted in tests that don't cover them
+-- Target models are not checked here: a missing one disables its type at runtime instead (Runner.Targets)
 
 local ConfigValidator = {}
 
 local MAX_ID_LENGTH = 32 -- matches string(1..32) in Remotes.blink
+local NOTHING = "Nothing" -- reserved TargetTypeId for a public roll that spawns nothing
 local MAX_U16 = 65535 -- Amount and Count are u16 in Remotes.blink
 local MAX_PLACEMENT_ATTEMPTS = 50
 
@@ -190,6 +193,29 @@ local function validateSpawner(report, config)
 	end
 end
 
+-- Common to every weighted list: a non-empty array of tables with Weight > 0. Calls checkEntry(entry, entryPath)
+local function validateWeightedList(report, list, path, checkEntry)
+	if not report.isTable(list, path) then
+		return
+	end
+	report.check(#list > 0, `{path} must be a non-empty list`)
+	local totalWeight = 0
+	for index, entry in list do
+		local entryPath = `{path}[{index}]`
+		if not report.isTable(entry, entryPath) then
+			continue
+		end
+		report.check(isPositive(entry.Weight), `{entryPath}.Weight must be > 0`)
+		if isPositive(entry.Weight) then
+			totalWeight += entry.Weight
+		end
+		checkEntry(entry, entryPath)
+	end
+	report.check(#list == 0 or totalWeight > 0, `{path} total weight must be > 0`)
+end
+
+local PROFILE_KEYS = { Eggs = true, Targets = true }
+
 -- Returns the zone profile table (or an empty one) so cross-file checks can still run
 local function validateZoneIds(report, config)
 	if not report.isTable(config, "IdConfig") then
@@ -204,23 +230,34 @@ local function validateZoneIds(report, config)
 		if not report.isTable(profile, path) then
 			continue
 		end
-		report.check(#profile > 0, `{path} must be a non-empty list`)
-		local totalWeight = 0
-		for index, entry in profile do
-			local entryPath = `{path}[{index}]`
-			if not report.isTable(entry, entryPath) then
-				continue
-			end
-			report.check(isId(entry.ItemTypeId), `{entryPath}.ItemTypeId must be a 1..{MAX_ID_LENGTH} character string`)
-			report.check(isPositive(entry.Weight), `{entryPath}.Weight must be > 0`)
-			if isPositive(entry.Weight) then
-				totalWeight += entry.Weight
-			end
-			if report.range(entry.Amount, `{entryPath}.Amount`, true) then
-				report.check(entry.Amount.Min >= 1, `{entryPath}.Amount.Min must be >= 1`)
-			end
+		for key in profile do
+			report.check(PROFILE_KEYS[key] == true, `{path} has unknown key {key} (expected Eggs and/or Targets)`)
 		end
-		report.check(#profile == 0 or totalWeight > 0, `{path} total weight must be > 0`)
+		if profile.Eggs ~= nil then
+			validateWeightedList(report, profile.Eggs, `{path}.Eggs`, function(entry, entryPath)
+				report.check(isId(entry.ItemTypeId), `{entryPath}.ItemTypeId must be a 1..{MAX_ID_LENGTH} character string`)
+				if report.range(entry.Amount, `{entryPath}.Amount`, true) then
+					report.check(entry.Amount.Min >= 1, `{entryPath}.Amount.Min must be >= 1`)
+				end
+			end)
+		end
+		if profile.Targets ~= nil then
+			validateWeightedList(report, profile.Targets, `{path}.Targets`, function(entry, entryPath)
+				report.check(isId(entry.TargetTypeId), `{entryPath}.TargetTypeId must be a 1..{MAX_ID_LENGTH} character string`)
+				if entry.TargetTypeId == NOTHING then
+					return
+				end
+				if report.range(entry.Health, `{entryPath}.Health`, true) then
+					report.check(entry.Health.Min >= 1, `{entryPath}.Health.Min must be >= 1`)
+				end
+				if report.range(entry.Scale, `{entryPath}.Scale`, true) then
+					report.check(entry.Scale.Min >= 1, `{entryPath}.Scale.Min must be >= 1`)
+				end
+				if report.range(entry.RadiusGrowth, `{entryPath}.RadiusGrowth`, false) then
+					report.check(entry.RadiusGrowth.Min > 0, `{entryPath}.RadiusGrowth.Min must be > 0`)
+				end
+			end)
+		end
 	end
 
 	local fallback = config.FallbackZoneProfile
@@ -241,6 +278,47 @@ local function validateTutorial(report, config)
 	)
 end
 
+local function validateTargetConfig(report, config)
+	if not report.isTable(config, "TargetConfig") then
+		return
+	end
+	for _, key in { "StarterLifetime", "TargetTime", "InitialRadius", "TestHitDamage", "HitRange" } do
+		report.check(isPositive(config[key]), `TargetConfig.{key} must be > 0`)
+	end
+	for _, key in { "GraceTime", "AppearDuration", "DisappearDuration", "Clearance", "EggClearance", "RewardCooldown" } do
+		report.check(isNonNegative(config[key]), `TargetConfig.{key} must be >= 0`)
+	end
+	report.check(isFiniteNumber(config.SurfaceOffset), "TargetConfig.SurfaceOffset must be a number")
+	for _, key in { "StartersPerZone", "PlacementCandidates", "RunPlacementBatches", "RadiusGrowthSpawnLimit", "HitRequestsPerTick" } do
+		report.check(isWholeNumber(config[key]) and config[key] >= 1, `TargetConfig.{key} must be a whole number >= 1`)
+	end
+
+	if report.isTable(config.Types, "TargetConfig.Types") then
+		for typeId, definition in config.Types do
+			local path = `TargetConfig.Types.{typeId}`
+			report.check(isId(typeId), `{path}: TargetTypeId must be a 1..{MAX_ID_LENGTH} character string`)
+			report.check(typeId ~= NOTHING, `{path}: "{NOTHING}" is reserved for the empty roll`)
+			if report.isTable(definition, path) then
+				report.check(
+					type(definition.ModelName) == "string" and definition.ModelName ~= "",
+					`{path}.ModelName must be a non-empty string`
+				)
+			end
+		end
+	end
+
+	if report.isTable(config.RewardBrackets, "TargetConfig.RewardBrackets") then
+		for index, bracket in config.RewardBrackets do
+			local path = `TargetConfig.RewardBrackets[{index}]`
+			if not report.isTable(bracket, path) then
+				continue
+			end
+			report.check(isPositive(bracket.MinScore), `{path}.MinScore must be > 0`)
+			validateWeightedList(report, bracket.Drops, `{path}.Drops`, function() end)
+		end
+	end
+end
+
 local function validateDebug(report, config)
 	if not report.isTable(config, "DebugConfig") then
 		return
@@ -255,14 +333,14 @@ local function validateDistributionItems(report, zones, catalog, maxStack)
 	local catalogOk = type(catalog) == "table"
 	local stackOk = isWholeNumber(maxStack)
 	for zoneId, profile in zones do
-		if type(profile) ~= "table" then
+		if type(profile) ~= "table" or type(profile.Eggs) ~= "table" then
 			continue
 		end
-		for index, entry in profile do
+		for index, entry in profile.Eggs do
 			if type(entry) ~= "table" then
 				continue
 			end
-			local entryPath = `IdConfig.Zones.{zoneId}[{index}]`
+			local entryPath = `IdConfig.Zones.{zoneId}.Eggs[{index}]`
 			if catalogOk and isId(entry.ItemTypeId) then
 				report.check(
 					catalog[entry.ItemTypeId] ~= nil,
@@ -272,6 +350,27 @@ local function validateDistributionItems(report, zones, catalog, maxStack)
 			local amount = entry.Amount
 			if stackOk and type(amount) == "table" and isWholeNumber(amount.Max) then
 				report.check(amount.Max <= maxStack, `{entryPath}.Amount.Max must be <= InventoryConfig.MAX_STACK ({maxStack})`)
+			end
+		end
+	end
+end
+
+-- Every zone Targets entry must name a configured type or Nothing
+local function validateTargetTypes(report, zones, targetConfig)
+	local types = type(targetConfig) == "table" and type(targetConfig.Types) == "table" and targetConfig.Types or nil
+	if not types then
+		return
+	end
+	for zoneId, profile in zones do
+		if type(profile) ~= "table" or type(profile.Targets) ~= "table" then
+			continue
+		end
+		for index, entry in profile.Targets do
+			if type(entry) == "table" and isId(entry.TargetTypeId) and entry.TargetTypeId ~= NOTHING then
+				report.check(
+					types[entry.TargetTypeId] ~= nil,
+					`IdConfig.Zones.{zoneId}.Targets[{index}].TargetTypeId "{entry.TargetTypeId}" is not in TargetConfig.Types`
+				)
 			end
 		end
 	end
@@ -300,9 +399,11 @@ function ConfigValidator.validate(inputs)
 	local zones = validateZoneIds(report, inputs.zoneIdConfig)
 	validateTutorial(report, inputs.tutorialConfig)
 	validateDebug(report, inputs.debugConfig)
+	validateTargetConfig(report, inputs.targetConfig)
 
 	local maxStack = type(inputs.inventoryConfig) == "table" and inputs.inventoryConfig.MAX_STACK or nil
 	validateDistributionItems(report, zones, inputs.itemCatalog, maxStack)
+	validateTargetTypes(report, zones, inputs.targetConfig)
 	validateTemplates(report, inputs.itemCatalog, inputs.hasTemplate)
 
 	return #report.errors == 0, report.errors

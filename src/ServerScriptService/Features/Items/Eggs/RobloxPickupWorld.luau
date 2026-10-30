@@ -25,7 +25,7 @@ local function getCharacters()
 	return characters
 end
 
--- options: { workspace, zoneTag }
+-- options: { workspace, zoneTag, ignore: { Instance }? }   ignore: extra instances rays and overlap checks skip
 function RobloxPickupWorld.newWorld(options)
 	local world = options.workspace
 
@@ -33,6 +33,9 @@ function RobloxPickupWorld.newWorld(options)
 		local ignored = getCharacters()
 		for _, zonePart in CollectionService:GetTagged(options.zoneTag) do
 			table.insert(ignored, zonePart)
+		end
+		for _, instance in options.ignore or {} do
+			table.insert(ignored, instance)
 		end
 		return ignored
 	end

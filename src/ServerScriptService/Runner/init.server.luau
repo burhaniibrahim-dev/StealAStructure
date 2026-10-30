@@ -26,6 +26,7 @@ local SpawnerConfig = require(ServerConfigs.Zones.SpawnerConfig)
 local ZoneIdConfig = require(ServerConfigs.Zones.IdConfig)
 local TutorialConfig = require(ServerConfigs.TutorialConfig)
 local DebugConfig = require(ServerConfigs.DebugConfig)
+local TargetConfig = require(ServerConfigs.Targets.TargetConfig)
 
 local ZONE_POLL_INTERVAL = 0.3
 
@@ -43,6 +44,7 @@ ConfigValidator.assert({
 	zoneIdConfig = ZoneIdConfig,
 	tutorialConfig = TutorialConfig,
 	debugConfig = DebugConfig,
+	targetConfig = TargetConfig,
 	hasTemplate = eggTemplates.Has,
 })
 
@@ -84,6 +86,26 @@ local inventory = InventoryService.new({
 local Zones = require(script.Zones)
 local zones = Zones.Init({ getActivePlayers = getActivePlayers })
 --============================================================================
+-- Target minigame. Built before eggs: egg placement keeps clear of live targets and ignores their models.
+-- Its own clock: server time, shared with clients for countdowns. Never mixed with time()
+
+local function serverNow()
+	return workspace:GetServerTimeNow()
+end
+
+local TargetsSetup = require(script.Targets)
+local targets, targetSpawner, targetRegistry, targetFolder = TargetsSetup.Init({
+	targetConfig = TargetConfig,
+	placementConfig = PlacementConfig,
+	spawnerConfig = SpawnerConfig,
+	zoneConfig = ZoneIdConfig,
+	zones = zones,
+	eggRegistry = eggRegistry,
+	playerData = playerData,
+	rng = rng,
+	now = serverNow,
+})
+--============================================================================
 -- Eggs
 local Eggs = require(script.Eggs)
 local eggs = Eggs.Init({
@@ -97,6 +119,9 @@ local eggs = Eggs.Init({
 	zones = zones,
 	eggRegistry = eggRegistry,
 	rng = rng,
+	targetRegistry = targetRegistry,
+	targetFolder = targetFolder,
+	targetClearance = TargetConfig.EggClearance,
 })
 --============================================================================
 -- Zones (stage 2: the spawner, which needs eggs)
@@ -119,6 +144,7 @@ Services.PlayerData = playerData
 Services.Inventory = inventory
 Services.Zones = zones
 Services.Eggs = eggs
+Services.Targets = targets
 
 --============================================================================
 -- Owner-only egg networking. A player gets nothing live until their client asks for the snapshot,
@@ -175,10 +201,38 @@ eggs.Removed:Connect(function(record, reason)
 end)
 
 --============================================================================
+-- Target networking. Entities replicate as models; only the player's own status and their requests use Blink
+Networker.HitTarget.On(function(player, request)
+	targets:HandleHitRequest(player, request.TargetId)
+end)
+
+Networker.TargetShown.On(function(player, request)
+	targets:HandleShown(player, request.TargetId)
+end)
+
+local function sendTargetStatus(player)
+	if player.Parent == Players then
+		Networker.TargetStatus.Fire(player, targets:GetStatus(player))
+	end
+end
+targets.StatusChanged:Connect(sendTargetStatus)
+
+targets.Settled:Connect(function(run, endReason, paidDrop)
+	if DebugConfig.DebugSpawnLog then
+		print(
+			`[TargetDebug] {run.Player.Name} run {run.RunId} ended ({endReason}): score {run.Score}, `
+				.. `{run.SpawnIndex} target(s), reward {if paidDrop then "paid" else "none"}`
+		)
+	end
+end)
+
+--============================================================================
 -- Wiring
 zones.ZoneRemoved:Connect(function(zoneId)
 	eggs:RemoveZonePickups(zoneId)
 	spawner:RemoveZone(zoneId)
+	targets:RemoveZone(zoneId)
+	targetSpawner:RemoveZone(zoneId)
 end)
 
 playerData.Ready:Connect(function(player)
@@ -186,9 +240,11 @@ playerData.Ready:Connect(function(player)
 	if snapshot then
 		Networker.InventorySnapshot.Fire(player, snapshot)
 	end
+	sendTargetStatus(player)
 end)
 
 playerData.Releasing:Connect(function(player)
+	targets:RemovePlayer(player)
 	eggs:OnPlayerRemoving(player)
 	spawner:RemovePlayer(player)
 	zones:RemovePlayer(player)
@@ -235,6 +291,7 @@ Players.PlayerRemoving:Connect(function(player)
 	-- Releasing (above) runs the same cleanup before the save ends. The repeat calls are idempotent and
 	-- cover players whose profile never loaded
 	playerData:Release(player)
+	targets:RemovePlayer(player)
 	eggs:OnPlayerRemoving(player)
 	spawner:RemovePlayer(player)
 	zones:RemovePlayer(player)
@@ -286,10 +343,15 @@ local heartbeat = RunService.Heartbeat:Connect(function(deltaTime)
 		zones:Poll()
 	end
 
+	-- Target timeouts and exits are checked every frame so runs end on time; scheduling uses the shared tick
+	local now = serverNow()
+	targets:Sweep(now)
+
 	if spawnElapsed >= SpawnerConfig.TickInterval then
 		spawnElapsed = 0
 		eggs:ExpireDue()
 		spawner:Step(time())
+		targetSpawner:Step(now)
 	end
 end)
 
@@ -297,6 +359,8 @@ end)
 -- Shutdown
 game:BindToClose(function()
 	heartbeat:Disconnect()
+	targetSpawner:Destroy()
+	targets:Destroy()
 	spawner:Destroy()
 	eggs:Destroy()
 	zones:Destroy()

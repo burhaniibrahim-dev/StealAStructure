@@ -8,8 +8,9 @@
 -- Egg clearance only counts the requesting owner's records: other players' eggs exist only on their own clients,
 -- so they never take up this owner's space.
 --
+-- The ground step (ray, embedded, material, blocked surface, slope) is the shared GroundProbe, also used by targets.
+--
 -- world interface (Roblox implementation in RobloxPickupWorld):
---   world:Raycast(origin, direction) -> { Position, Normal, Distance, Material: string, Blocked: boolean, Instance: any? }?
 --   world:GetCharacterPositions() -> { Vector3 }
 --   world:IsSpaceBlocked(position, radius, ignore: any?) -> boolean   ignore = the ground the ray hit
 
@@ -30,26 +31,18 @@ PickupPlacement.Reason = {
 	Trap = "Trap",
 }
 
--- A ray that hits within this distance of its origin started inside geometry (e.g. under terrain)
-local EMBEDDED_DISTANCE = 0.05
-
--- deps: config (Configs/Eggs/PlacementConfig), detection, world, registry (EggRegistry), getAnchors(zoneId)?,
---       exclusions: { provider }, traps: provider?
+-- deps: config (Configs/Eggs/PlacementConfig), detection, world, ground (GroundProbe built from the same config),
+--       registry (EggRegistry), getAnchors(zoneId)?, exclusions: { provider }, traps: provider?
 function PickupPlacement.new(deps)
-	local forbidden = {}
-	for _, name in deps.config.ForbiddenMaterials do
-		forbidden[name] = true
-	end
 	return setmetatable({
 		_config = deps.config, -- Configs/Eggs/PlacementConfig
 		_detection = deps.detection,
 		_world = deps.world,
+		_ground = deps.ground,
 		_registry = deps.registry,
 		_getAnchors = deps.getAnchors,
 		_exclusions = deps.exclusions or {},
 		_traps = deps.traps,
-		_forbidden = forbidden,
-		_minUpDot = math.cos(math.rad(deps.config.MaxSlopeDegrees)),
 	}, PickupPlacement)
 end
 
@@ -75,21 +68,9 @@ function PickupPlacement:Validate(origin, rayLength, zone, ownerUserId)
 	local config = self._config
 	local Reason = PickupPlacement.Reason
 
-	local hit = self._world:Raycast(origin, Vector3.new(0, -rayLength, 0))
+	local hit, groundReason = self._ground:Probe(origin, rayLength)
 	if not hit then
-		return nil, Reason.NoGround
-	end
-	if hit.Distance <= EMBEDDED_DISTANCE then
-		return nil, Reason.Embedded
-	end
-	if self._forbidden[hit.Material] then
-		return nil, Reason.ForbiddenMaterial
-	end
-	if hit.Blocked then
-		return nil, Reason.BlockedSurface
-	end
-	if hit.Normal.Y < self._minUpDot then
-		return nil, Reason.TooSteep
+		return nil, groundReason -- same names as Reason.NoGround .. Reason.TooSteep
 	end
 
 	local position = hit.Position + Vector3.new(0, config.SurfaceOffset, 0)

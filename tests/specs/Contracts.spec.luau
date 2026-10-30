@@ -16,6 +16,7 @@ local function shippedInputs()
 		zoneIdConfig = require("../../src/ServerScriptService/Configs/Zones/IdConfig"),
 		tutorialConfig = require("../../src/ServerScriptService/Configs/TutorialConfig"),
 		debugConfig = require("../../src/ServerScriptService/Configs/DebugConfig"),
+		targetConfig = require("../../src/ServerScriptService/Configs/Targets/TargetConfig"),
 		hasTemplate = function()
 			return true
 		end,
@@ -46,9 +47,9 @@ describe("Config validation", function()
 
 	it("reports bad values by file and field", function()
 		local inputs = fixtureInputs()
-		inputs.zoneIdConfig.Zones.Default[1].Weight = 0
-		inputs.zoneIdConfig.Zones.Default[2].ItemTypeId = "GhostEgg"
-		inputs.zoneIdConfig.Zones.Default[1].Amount = { Min = 1, Max = 500 }
+		inputs.zoneIdConfig.Zones.Default.Eggs[1].Weight = 0
+		inputs.zoneIdConfig.Zones.Default.Eggs[2].ItemTypeId = "GhostEgg"
+		inputs.zoneIdConfig.Zones.Default.Eggs[1].Amount = { Min = 1, Max = 500 }
 		inputs.zoneIdConfig.FallbackZoneProfile = "Missing"
 		inputs.spawnerConfig.SpawnInterval = { Min = 5, Max = 1 }
 		inputs.spawnerConfig.PlacementAttempts = 0
@@ -57,7 +58,7 @@ describe("Config validation", function()
 		local ok, errors = ConfigValidator.validate(inputs)
 		falsy(ok, "valid")
 		local text = table.concat(errors, "\n")
-		truthy(text:find("IdConfig.Zones.Default[1].Weight must be > 0", 1, true), "weight")
+		truthy(text:find("IdConfig.Zones.Default.Eggs[1].Weight must be > 0", 1, true), "weight")
 		truthy(text:find('"GhostEgg" is not in ItemDefintions', 1, true), "unknown item")
 		truthy(text:find("Amount.Max must be <= InventoryConfig.MAX_STACK", 1, true), "amount within stack")
 		truthy(text:find("IdConfig.FallbackZoneProfile", 1, true), "fallback")
@@ -70,14 +71,14 @@ describe("Config validation", function()
 
 	it("survives malformed tables without crashing", function()
 		local inputs = fixtureInputs()
-		inputs.zoneIdConfig.Zones = { Default = "oops", Other = { "not an entry" } }
+		inputs.zoneIdConfig.Zones = { Default = "oops", Other = { Eggs = { "not an entry" } } }
 		inputs.spawnerConfig = nil
 		inputs.itemCatalog.IceEgg = 5
 		local ok, errors = ConfigValidator.validate(inputs)
 		falsy(ok, "valid")
 		local text = table.concat(errors, "\n")
 		truthy(text:find("IdConfig.Zones.Default must be a table", 1, true), "profile type")
-		truthy(text:find("IdConfig.Zones.Other[1] must be a table", 1, true), "entry type")
+		truthy(text:find("IdConfig.Zones.Other.Eggs[1] must be a table", 1, true), "entry type")
 		truthy(text:find("SpawnerConfig must be a table", 1, true), "missing file")
 		truthy(text:find("ItemDefintions.IceEgg must be a table", 1, true), "catalog entry type")
 	end)

@@ -43,6 +43,22 @@ function ExclusionProviders.VolumeProvider(name, getVolumes)
 	}
 end
 
+-- Points that keep a fixed 3D `radius` clear around them (e.g. live targets). The caller's padding is ignored:
+-- the radius is the rule. iterate: () -> (iterator, state) over { Position: Vector3 } records; read-only
+function ExclusionProviders.PointProvider(name, iterate, radius)
+	return {
+		Name = name,
+		IsExcluded = function(_, position)
+			for _, record in iterate() do
+				if (record.Position - position).Magnitude < radius then
+					return true
+				end
+			end
+			return false
+		end,
+	}
+end
+
 -- Roblox: bounding boxes of instances tagged `tag` (BaseParts or Models) inside `root`
 function ExclusionProviders.TaggedProvider(name, collectionService, tag, root)
 	return ExclusionProviders.VolumeProvider(name, function()

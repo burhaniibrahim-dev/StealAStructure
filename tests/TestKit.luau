@@ -253,9 +253,15 @@ local SpawnTrackRegistry = require("../src/ServerScriptService/Features/Zones/Sp
 local EggRegistry = require("../src/ServerScriptService/Features/Items/Eggs/EggRegistry")
 local EggService = require("../src/ServerScriptService/Features/Items/Eggs/EggService")
 local PickupPlacement = require("../src/ServerScriptService/Features/Items/PickupPlacement")
+local GroundProbe = require("../src/ServerScriptService/Features/Items/GroundProbe")
 local ExclusionProviders = require("../src/ServerScriptService/Features/Items/ExclusionProviders")
 local InventoryService = require("../src/ServerScriptService/Features/Inventory/InventoryService")
 local ConfigValidator = require("../src/ServerScriptService/Features/Util/ConfigValidator")
+local TargetRegistry = require("../src/ServerScriptService/Features/Targets/TargetRegistry")
+local TargetPlacement = require("../src/ServerScriptService/Features/Targets/TargetPlacement")
+local TargetService = require("../src/ServerScriptService/Features/Targets/TargetService")
+local TargetSpawner = require("../src/ServerScriptService/Features/Targets/TargetSpawner")
+local TargetRewards = require("../src/ServerScriptService/Features/Targets/TargetRewards")
 
 TestKit.Signal = Signal
 TestKit.ZoneDetection = ZoneDetection
@@ -267,6 +273,11 @@ TestKit.EggService = EggService
 TestKit.ExclusionProviders = ExclusionProviders
 TestKit.InventoryService = InventoryService
 TestKit.ConfigValidator = ConfigValidator
+TestKit.TargetRegistry = TargetRegistry
+TestKit.TargetPlacement = TargetPlacement
+TestKit.TargetService = TargetService
+TestKit.TargetSpawner = TargetSpawner
+TestKit.TargetRewards = TargetRewards
 
 function TestKit.ItemCatalog()
 	return {
@@ -314,13 +325,46 @@ function TestKit.Configs()
 			FallbackZoneProfile = "Default",
 			Zones = {
 				Default = {
-					{ ItemTypeId = "SnowEgg", Weight = 3, Amount = { Min = 1, Max = 1 } },
-					{ ItemTypeId = "IceEgg", Weight = 1, Amount = { Min = 1, Max = 1 } },
+					Eggs = {
+						{ ItemTypeId = "SnowEgg", Weight = 3, Amount = { Min = 1, Max = 1 } },
+						{ ItemTypeId = "IceEgg", Weight = 1, Amount = { Min = 1, Max = 1 } },
+					},
+					Targets = {
+						{
+							TargetTypeId = "Red",
+							Weight = 1,
+							Health = { Min = 100, Max = 100 },
+							Scale = { Min = 2, Max = 2 },
+							RadiusGrowth = { Min = 2, Max = 2 },
+						},
+						{ TargetTypeId = "Nothing", Weight = 1 },
+					},
 				},
 			},
 		},
 		tutorialConfig = { DefaultOrdinaryCollectionEnabled = true },
 		debugConfig = { DebugSpawnLog = false, DebugLogInterval = 5 },
+		targetConfig = {
+			StartersPerZone = 3,
+			StarterLifetime = 5,
+			TargetTime = 5,
+			GraceTime = 0.5,
+			AppearDuration = 0.1,
+			DisappearDuration = 0.1,
+			PlacementCandidates = 60,
+			RunPlacementBatches = 5,
+			InitialRadius = 5,
+			RadiusGrowthSpawnLimit = 10,
+			Clearance = 4,
+			EggClearance = 6,
+			SurfaceOffset = 0,
+			RewardCooldown = 30,
+			RewardBrackets = {},
+			TestHitDamage = 1,
+			HitRequestsPerTick = 10,
+			HitRange = 150,
+			Types = { Red = { ModelName = "Target" } },
+		},
 	}
 end
 
@@ -371,10 +415,16 @@ function TestKit.System(options)
 		maxStack = sys.configs.inventoryConfig.MAX_STACK,
 		Signal = Signal,
 	})
+	sys.ground = GroundProbe.new({
+		world = sys.world,
+		maxSlopeDegrees = sys.configs.placementConfig.MaxSlopeDegrees,
+		forbiddenMaterials = sys.configs.placementConfig.ForbiddenMaterials,
+	})
 	sys.placement = PickupPlacement.new({
 		config = sys.configs.placementConfig,
 		detection = ZoneDetection,
 		world = sys.world,
+		ground = sys.ground,
 		registry = sys.eggRegistry,
 		getAnchors = function(zoneId)
 			return sys.zones:GetAnchors(zoneId)
@@ -489,6 +539,128 @@ function TestKit.System(options)
 	end
 	function sys.setCount(player, itemTypeId, count)
 		sys.data:GetData(player).Inventory[itemTypeId] = count
+	end
+	return sys
+end
+
+-- Targets ------------------------------------------------------------------------
+
+-- Server target models as plain tables. Every model exists unless named in `missing`
+function TestKit.FakeTargetWorld()
+	local world = { missing = {}, models = {} }
+	function world:HasModel(modelName)
+		return not self.missing[modelName]
+	end
+	function world:Create(record, modelName)
+		local model = {
+			ModelName = modelName,
+			Destroyed = false,
+			Attributes = {
+				TargetId = record.TargetId,
+				Kind = record.Kind,
+				OwnerUserId = record.OwnerUserId or 0,
+				State = "Live",
+				Revealed = record.Kind == "Starter",
+				MaxHealth = record.MaxHealth or 0,
+				Health = record.Health or 0,
+				Deadline = 0,
+			},
+		}
+		table.insert(self.models, model)
+		return model
+	end
+	function world:SetAttributes(model, attributes)
+		if model then
+			for name, value in attributes do
+				model.Attributes[name] = value
+			end
+		end
+	end
+	function world:Destroy(model)
+		if model then
+			model.Destroyed = true
+		end
+	end
+	return world
+end
+
+-- The egg system plus the real target services around fakes. options: TestKit.System options, plus pay?
+function TestKit.TargetSystem(options)
+	options = table.clone(options or {})
+	options.configs = options.configs or TestKit.Configs()
+	-- Egg placement keeps EggClearance from live targets, exactly as Runner.Eggs wires it
+	local targetRegistry = TargetRegistry.new()
+	local exclusions = table.clone(options.exclusions or {})
+	table.insert(exclusions, ExclusionProviders.PointProvider("Targets", function()
+		return targetRegistry:IterateTargets()
+	end, options.configs.targetConfig.EggClearance))
+	options.exclusions = exclusions
+
+	local sys = TestKit.System(options)
+	sys.targetConfig = sys.configs.targetConfig
+	sys.targetWorld = TestKit.FakeTargetWorld()
+	sys.targetRegistry = targetRegistry
+	sys.targetPlacement = TargetPlacement.new({
+		config = sys.targetConfig,
+		placementConfig = sys.configs.placementConfig,
+		ground = sys.ground,
+		detection = ZoneDetection,
+		getZones = function()
+			return sys.zones:GetZones()
+		end,
+		world = sys.world,
+		eggRegistry = sys.eggRegistry,
+		targetRegistry = sys.targetRegistry,
+	})
+	sys.targets = TargetService.new({
+		config = sys.targetConfig,
+		batchInterval = sys.configs.spawnerConfig.TickInterval,
+		registry = sys.targetRegistry,
+		placement = sys.targetPlacement,
+		world = sys.targetWorld,
+		rewards = TargetRewards.new({ brackets = sys.targetConfig.RewardBrackets, rng = sys.rng, pay = options.pay }),
+		zones = sys.zones,
+		data = sys.data,
+		isPlayerPresent = function(player)
+			return player.Present
+		end,
+		getRootPosition = function(player)
+			return sys.roots[player]
+		end,
+		now = sys.time.now,
+		rng = sys.rng,
+		Signal = Signal,
+		warn = function(message)
+			table.insert(sys.warnings, message)
+		end,
+	})
+	sys.targetSpawner = TargetSpawner.new({
+		config = sys.targetConfig,
+		spawnerConfig = sys.configs.spawnerConfig,
+		zoneConfig = sys.configs.zoneIdConfig,
+		zones = sys.zones,
+		targets = sys.targets,
+		registry = sys.targetRegistry,
+		rng = sys.rng,
+	})
+	sys.zones.ZoneRemoved:Connect(function(zoneId)
+		sys.targets:RemoveZone(zoneId)
+		sys.targetSpawner:RemoveZone(zoneId)
+	end)
+
+	-- Every Settled signal, in order: { Run, Reason, Paid }
+	sys.settlements = {}
+	sys.targets.Settled:Connect(function(run, reason, paid)
+		table.insert(sys.settlements, { Run = run, Reason = reason, Paid = paid })
+	end)
+
+	-- Advances the clock in small steps, sweeping like the Heartbeat does
+	function sys.step(seconds)
+		local target = sys.time.t + seconds
+		while sys.time.t < target - 1e-9 do
+			sys.time.advance(math.min(0.05, target - sys.time.t))
+			sys.targets:Sweep(sys.time.t)
+		end
 	end
 	return sys
 end

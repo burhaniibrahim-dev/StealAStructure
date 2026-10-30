@@ -50,3 +50,12 @@ Rojo `default.project.json` (ServerPackages mapped under ServerScriptService). T
 - Modules: src/ReplicatedStorage/Assets/UI/EggTimer.luau (React countdown: per-digit slide-down, 0.15 s, only changed digits move, leftover digit slides out and re-centres, fixed "s", stops at 0) and EggBillboard.luau (copies the authored TextAttachment UI into React, Timer -> EggTimer).
 - To enable: require EggBillboard in Client.client.luau and uncomment the `decorate` hook passed to SpawningVisuals.new. SpawningVisuals' `decorate` dependency stays in place (optional, unused at launch).
 - Not verified in Studio; reviewed by reading only.
+
+## Target minigames (implemented 2026-10-29, direct implementation from learner's master spec)
+- Configs/Targets/TargetConfig (timings, placement, temporary click, reward brackets [empty], Types -> ModelName); per-zone weights and run tuning in IdConfig Zones.<id>.Targets (egg lists moved to Zones.<id>.Eggs).
+- Features/Targets: TargetRegistry (records/indexes), TargetPlacement (disk∩zone sampling, highest-priority zone, 3D clearance), TargetService (claims, runs, ack, ApplyHit seam for throwing, Sweep, settlement, cooldown), TargetSpawner (per-zone public schedule), TargetRewards (bracket boundary; no payout yet), RobloxTargetWorld (Workspace.Targets models + attributes).
+- Features/Items/GroundProbe: ground step shared by eggs (PickupPlacement) and targets.
+- Runner/Targets setup; Runner drives targets:Sweep every Heartbeat and targetSpawner:Step on the shared tick, both with workspace:GetServerTimeNow().
+- Client: Shared/Features/Visuals/TargetVisuals (viewer modes, appear/leave, owner ack, temporary HUD); temporary click block in Client.client.luau.
+- Blink: TargetStatus (server -> owner), TargetShown, HitTarget (client -> server).
+- Asset: ReplicatedStorage.Assets.Targetables.Targets.Target is Studio-only; missing models disable their type with a warning.

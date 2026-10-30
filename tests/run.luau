@@ -1,4 +1,4 @@
--- Runs every egg system spec under Lune: `lune run tests/run`
+-- Runs every egg and target system spec under Lune: `lune run tests/run`
 local process = require("@lune/process")
 local TestKit = require("./TestKit")
 
@@ -13,6 +13,8 @@ require("./specs/ClientEggs.spec")
 -- Tutorial.spec is held out: it tests reserved/scripted eggs, whose design is pending (tutorial module boundary)
 print("Contracts")
 require("./specs/Contracts.spec")
+print("Targets")
+require("./specs/Targets.spec")
 
 local results = TestKit.results()
 print(`\n{results.passed} passed, {results.failed} failed`)

@@ -12,6 +12,7 @@ local RobloxPlayers = require(_Features.Util.RobloxPlayers)
 local Signal = require(_Features.Util.Signal)
 local EggService = require(_Features.Items.Eggs.EggService)
 local ExclusionProviders = require(_Features.Items.ExclusionProviders)
+local GroundProbe = require(_Features.Items.GroundProbe)
 local PickupPlacement = require(_Features.Items.PickupPlacement)
 local RobloxPickupWorld = require(_Features.Items.Eggs.RobloxPickupWorld)
 local SpawnTrackRegistry = require(_Features.Zones.SpawnTrackRegistry)
@@ -33,19 +34,30 @@ local Eggs = {}
 --   zones             ZoneService
 --   eggRegistry       EggRegistry (shared with the ZoneSpawner)
 --   rng               Random (shared with the ZoneSpawner)
+--   targetRegistry    TargetRegistry: eggs keep targetClearance away from every live target
+--   targetFolder      Workspace.Targets: ground rays pass through target models instead of landing on them
+--   targetClearance   TargetConfig.EggClearance
 -- Returns the EggService
 
 function Eggs.Init(deps)
 	local zones = deps.zones
+	local targetRegistry = deps.targetRegistry
 
 	-- No trap system exists yet and PlacementConfig.TrapPadding is commented out, so no trap provider is passed
+	local world = RobloxPickupWorld.newWorld({
+		workspace = workspace,
+		zoneTag = ZoneService.ZONE_TAG,
+		ignore = { deps.targetFolder },
+	})
 	local placement = PickupPlacement.new({
 		config = deps.placementConfig,
 		detection = ZoneDetection,
 		registry = deps.eggRegistry,
-		world = RobloxPickupWorld.newWorld({
-			workspace = workspace,
-			zoneTag = ZoneService.ZONE_TAG,
+		world = world,
+		ground = GroundProbe.new({
+			world = world,
+			maxSlopeDegrees = deps.placementConfig.MaxSlopeDegrees,
+			forbiddenMaterials = deps.placementConfig.ForbiddenMaterials,
 		}),
 		getAnchors = function(zoneId)
 			return zones:GetAnchors(zoneId)
@@ -57,6 +69,9 @@ function Eggs.Init(deps)
 				EXCLUSION_TAG,
 				workspace
 			),
+			ExclusionProviders.PointProvider("Targets", function()
+				return targetRegistry:IterateTargets()
+			end, deps.targetClearance),
 		},
 	})
 

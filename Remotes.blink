@@ -102,3 +102,39 @@ event InventoryFull {
 		ItemTypeId: string(1..32),
 	},
 }
+
+-- Targets -----------------------------------------------------------------
+-- Target entities are server models in Workspace.Targets, seen by everyone; their state is in model attributes.
+-- These events carry only what isn't on a model. Clients send nothing but server-issued TargetIds.
+
+-- To the owning player only: their own run/cooldown state, so starters can look unavailable to them.
+-- CooldownEndsAt is workspace:GetServerTimeNow() time (0 = none); presentation only, the server enforces it
+event TargetStatus {
+	From: Server,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		InRun: boolean,
+		CooldownEndsAt: f64,
+	},
+}
+
+-- The owner's client started showing its scoring target (sent when the appear animation starts)
+event TargetShown {
+	From: Client,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		TargetId: u32,
+	},
+}
+
+-- Temporary click interaction: the server decides whether it is a claim or damage, and how much
+event HitTarget {
+	From: Client,
+	Type: Reliable,
+	Call: SingleSync,
+	Data: struct {
+		TargetId: u32,
+	},
+}

@@ -166,6 +166,7 @@ Queue.Reliable[2] = table.create(256)
 Queue.Reliable[3] = table.create(256)
 Queue.Reliable[4] = table.create(256)
 Queue.Reliable[7] = table.create(256)
+Queue.Reliable[8] = table.create(256)
 export type ItemCounts = {[string]: number}
 export type EggRecord = { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }
 export type EggRemovedReason = ("Collected" | "Expired" | "ZoneRemoved" | "Removed")
@@ -330,6 +331,29 @@ function SerdesFunctions.ReadEVENT_InventoryFull(): ({ ItemTypeId: string })
 	return Value
 end
 
+function SerdesFunctions.ReadEVENT_TargetStatus(): ({ InRun: boolean, CooldownEndsAt: number })
+	-- Read BLOCK: 9 bytes
+	local BLOCK_START = Read(9)
+	local Value = {} :: any
+	Value.InRun = (buffer.readu8(RecieveBuffer, BLOCK_START + 0) == 1)
+	Value.CooldownEndsAt = buffer.readf64(RecieveBuffer, BLOCK_START + 1)
+	return Value
+end
+
+function SerdesFunctions.WriteEVENT_TargetShown(Value: { TargetId: number }): ()
+	-- Allocate BLOCK: 5 bytes
+	local BLOCK_START = Allocate(5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 9)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.TargetId)
+end
+
+function SerdesFunctions.WriteEVENT_HitTarget(Value: { TargetId: number }): ()
+	-- Allocate BLOCK: 5 bytes
+	local BLOCK_START = Allocate(5)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 10)
+	buffer.writeu32(SendBuffer, BLOCK_START + 1, Value.TargetId)
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
@@ -356,6 +380,15 @@ if not RunService:IsRunning() then
 	},
 	InventoryFull = {
 		On = NOOP
+	},
+	TargetStatus = {
+		On = NOOP
+	},
+	TargetShown = {
+		Fire = NOOP
+	},
+	HitTarget = {
+		Fire = NOOP
 	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
@@ -464,6 +497,17 @@ Reliable.OnClientEvent:Connect(function(Buffer: buffer, Instances: {Instance})
 					warn("[Blink]: Event queue of \"InventoryFull\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[7], {Value} :: {any})
+			end
+		elseif Index == 8 then
+			local Value: { InRun: boolean, CooldownEndsAt: number } = SerdesFunctions.ReadEVENT_TargetStatus()
+			if Events.Reliable[8] ~= nil then
+				SerdesEvent = "TargetStatus"
+				Events.Reliable[8](Value)
+			else
+				if #Queue.Reliable[8] > 256 then
+					warn("[Blink]: Event queue of \"TargetStatus\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[8], {Value} :: {any})
 			end
 		end
 	end
@@ -582,6 +626,30 @@ local Returns = table.freeze({
 					Events.Reliable[7] = nil
 				end
 			end
+		end
+	},
+	TargetStatus = {
+		On = function(Listener: (Value: { InRun: boolean, CooldownEndsAt: number }) -> ()): () -> ()
+			Events.Reliable[8] = Listener
+			for Index, Arguments in Queue.Reliable[8] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[8] = {}
+			return function (): ()
+				if Events.Reliable[8] == Listener then
+					Events.Reliable[8] = nil
+				end
+			end
+		end
+	},
+	TargetShown = {
+		Fire = function(Value: { TargetId: number }): ()
+			SerdesFunctions.WriteEVENT_TargetShown(Value)
+		end
+	},
+	HitTarget = {
+		Fire = function(Value: { TargetId: number }): ()
+			SerdesFunctions.WriteEVENT_HitTarget(Value)
 		end
 	},
 })

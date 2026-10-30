@@ -163,6 +163,8 @@ local SerdesEvent = "?"
 local SerdesThread: thread?
 Queue.Reliable[5] = table.create(256)
 Queue.Reliable[6] = table.create(256)
+Queue.Reliable[9] = table.create(256)
+Queue.Reliable[10] = table.create(256)
 export type ItemCounts = {[string]: number}
 export type EggRecord = { PickupId: number, ItemTypeId: string, Amount: number, ZoneId: string, Position: Vector3, RemainingLifetime: number }
 export type EggRemovedReason = ("Collected" | "Expired" | "ZoneRemoved" | "Removed")
@@ -316,6 +318,30 @@ function SerdesFunctions.WriteEVENT_InventoryFull(Value: { ItemTypeId: string })
 	buffer.writestring(SendBuffer, SendOffset, Value.ItemTypeId, Length)
 end
 
+function SerdesFunctions.WriteEVENT_TargetStatus(Value: { InRun: boolean, CooldownEndsAt: number }): ()
+	-- Allocate BLOCK: 10 bytes
+	local BLOCK_START = Allocate(10)
+	buffer.writeu8(SendBuffer, BLOCK_START + 0, 8)
+	buffer.writeu8(SendBuffer, BLOCK_START + 1, Value.InRun and 1 or 0)
+	buffer.writef64(SendBuffer, BLOCK_START + 2, Value.CooldownEndsAt)
+end
+
+function SerdesFunctions.ReadEVENT_TargetShown(): ({ TargetId: number })
+	-- Read BLOCK: 4 bytes
+	local BLOCK_START = Read(4)
+	local Value = {} :: any
+	Value.TargetId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	return Value
+end
+
+function SerdesFunctions.ReadEVENT_HitTarget(): ({ TargetId: number })
+	-- Read BLOCK: 4 bytes
+	local BLOCK_START = Read(4)
+	local Value = {} :: any
+	Value.TargetId = buffer.readu32(RecieveBuffer, BLOCK_START + 0)
+	return Value
+end
+
 if not RunService:IsRunning() then
 	local NOOP = function() end
 	local Returns = table.freeze({
@@ -360,6 +386,18 @@ if not RunService:IsRunning() then
 		FireAll = NOOP,
 		FireList = NOOP,
 		FireExcept = NOOP
+	},
+	TargetStatus = {
+		Fire = NOOP,
+		FireAll = NOOP,
+		FireList = NOOP,
+		FireExcept = NOOP
+	},
+	TargetShown = {
+		On = NOOP
+	},
+	HitTarget = {
+		On = NOOP
 	},
 	})
 	return Returns :: BLINK_EVENTS_SYMBOL
@@ -444,6 +482,28 @@ Reliable.OnServerEvent:Connect(function(Player: Player, Buffer: buffer, Instance
 					warn("[Blink]: Event queue of \"CollectEgg\" exceeded 256, did you forget to implement a listener?")
 				end
 				table.insert(Queue.Reliable[6], {Player, Value} :: {any})
+			end
+		elseif Index == 9 then
+			local Value: { TargetId: number } = SerdesFunctions.ReadEVENT_TargetShown()
+			if Events.Reliable[9] ~= nil then
+				SerdesEvent = "TargetShown"
+				Events.Reliable[9](Player, Value)
+			else
+				if #Queue.Reliable[9] > 256 then
+					warn("[Blink]: Event queue of \"TargetShown\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[9], {Player, Value} :: {any})
+			end
+		elseif Index == 10 then
+			local Value: { TargetId: number } = SerdesFunctions.ReadEVENT_HitTarget()
+			if Events.Reliable[10] ~= nil then
+				SerdesEvent = "HitTarget"
+				Events.Reliable[10](Player, Value)
+			else
+				if #Queue.Reliable[10] > 256 then
+					warn("[Blink]: Event queue of \"HitTarget\" exceeded 256, did you forget to implement a listener?")
+				end
+				table.insert(Queue.Reliable[10], {Player, Value} :: {any})
 			end
 		end
 	end
@@ -773,6 +833,80 @@ local Returns = table.freeze({
 				PlayersMap[Player] = Save()
 			end
 		end,
+	},
+	TargetStatus = {
+		Fire = function(Player: Player, Value: { InRun: boolean, CooldownEndsAt: number }): ()
+			Load(PlayersMap[Player])
+			SerdesFunctions.WriteEVENT_TargetStatus(Value)
+			PlayersMap[Player] = Save()
+		end,
+		FireAll = function(Value: { InRun: boolean, CooldownEndsAt: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_TargetStatus(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireList = function(List: {Player}, Value: { InRun: boolean, CooldownEndsAt: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_TargetStatus(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in List do
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+		FireExcept = function(Except: Player, Value: { InRun: boolean, CooldownEndsAt: number }): ()
+			Load()
+			SerdesFunctions.WriteEVENT_TargetStatus(Value)
+			local Buffer, Size, Instances = SendBuffer, SendCursor, SendInstances
+			for _, Player in Players:GetPlayers() do
+				if Player == Except then
+					continue
+				end
+				Load(PlayersMap[Player])
+				local Position = Allocate(Size)
+				buffer.copy(SendBuffer, Position, Buffer, 0, Size)
+				table.move(Instances, 1, #Instances, #SendInstances + 1, SendInstances)
+				PlayersMap[Player] = Save()
+			end
+		end,
+	},
+	TargetShown = {
+		On = function(Listener: (Player: Player, Value: { TargetId: number }) -> ()): () -> ()
+			Events.Reliable[9] = Listener
+			for Index, Arguments in Queue.Reliable[9] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[9] = {}
+			return function (): ()
+				if Events.Reliable[9] == Listener then
+					Events.Reliable[9] = nil
+				end
+			end
+		end
+	},
+	HitTarget = {
+		On = function(Listener: (Player: Player, Value: { TargetId: number }) -> ()): () -> ()
+			Events.Reliable[10] = Listener
+			for Index, Arguments in Queue.Reliable[10] do
+				Listener(table.unpack(Arguments))
+			end
+			Queue.Reliable[10] = {}
+			return function (): ()
+				if Events.Reliable[10] == Listener then
+					Events.Reliable[10] = nil
+				end
+			end
+		end
 	},
 })
 type BLINK_EVENTS_SYMBOL = typeof(Returns)

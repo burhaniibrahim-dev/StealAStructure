@@ -89,7 +89,7 @@ function ZoneSpawner.PickWeighted(distribution, rng)
 	return distribution[#distribution] -- roll landed exactly on total
 end
 
--- The distribution list for a zone: its own IdConfig entry, else the fallback profile, else nil
+-- The profile for a zone: its own IdConfig entry, else the fallback profile, else nil
 function ZoneSpawner:GetProfile(zoneId)
 	local zones = self._zoneConfig.Zones
 	local profile = zones[zoneId]
@@ -98,6 +98,12 @@ function ZoneSpawner:GetProfile(zoneId)
 	end
 	local fallback = self._zoneConfig.FallbackZoneProfile
 	return if fallback then zones[fallback] else nil
+end
+
+-- The zone profile's weighted egg list, or nil when the zone spawns no eggs
+function ZoneSpawner:GetEggDistribution(zoneId)
+	local profile = self:GetProfile(zoneId)
+	return profile and profile.Eggs
 end
 
 -- Every template exists at startup (ConfigValidator). If one has vanished since, the egg keeps its item and reward
@@ -121,8 +127,8 @@ end
 -- One spawn opportunity for `player` in `zoneId`: caps, weighted choice, template check, at most PlacementAttempts candidates
 function ZoneSpawner:SpawnFor(player, zoneId)
 	local userId = player.UserId
-	local profile = self:GetProfile(zoneId)
-	if not profile then
+	local distribution = self:GetEggDistribution(zoneId)
+	if not distribution then
 		self:_count(userId, "NoProfile")
 		return nil, "NoProfile"
 	end
@@ -134,7 +140,7 @@ function ZoneSpawner:SpawnFor(player, zoneId)
 		return nil, capReason
 	end
 
-	local entry = ZoneSpawner.PickWeighted(profile, self._rng)
+	local entry = ZoneSpawner.PickWeighted(distribution, self._rng)
 	if not self:_checkTemplate(entry.ItemTypeId) then
 		self:_count(userId, "ModelMissing")
 		return nil, "ModelMissing"
@@ -206,7 +212,7 @@ function ZoneSpawner:_stepPlayer(player, now)
 		self:_leave(userId, schedule, now)
 		schedule = nil
 	end
-	if not zoneId or not self:GetProfile(zoneId) then
+	if not zoneId or not self:GetEggDistribution(zoneId) then
 		return
 	end
 	schedule = schedule or self:_enter(userId, zoneId, now)
